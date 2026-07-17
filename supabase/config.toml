@@ -1,4 +1,25 @@
 project_id = "ortak-kasa"
 
+[auth]
+enabled = true
+site_url = "https://yunus-ozdemirr.github.io/hesap-kitap/"
+additional_redirect_urls = [
+  "https://yunus-ozdemirr.github.io/hesap-kitap/**",
+  "http://localhost:5173/**",
+  "http://127.0.0.1:5173/**",
+]
+enable_signup = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = true
+max_frequency = "1m"
+otp_length = 6
+otp_expiry = 3600
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
 [functions.invite-user]
 verify_jwt = true
