@@ -345,9 +345,23 @@ function Modal({ title, subtitle, onClose, children }: { title: string; subtitle
 }
 
 function LoginScreen({ error, onError }: { error: string; onError: (s: string) => void }) {
-  const [email, setEmail] = useState(''); const [sent, setSent] = useState(false); const [loading, setLoading] = useState(false)
-  const submit = async (e: FormEvent) => { e.preventDefault(); setLoading(true); onError(''); const { error: err } = await supabase!.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: window.location.href.split('#')[0] } }); setLoading(false); if (err) onError('Bu e-posta davetli değil veya bağlantı gönderilemedi.'); else setSent(true) }
-  return <div className="auth-page"><div className="auth-art"><div className="brand auth-brand"><div className="brand-mark"><span>₺</span></div><div><strong>ORTAK KASA</strong><small>ekibin para defteri</small></div></div><div className="auth-quote"><span>01 / GÜVENLİ ORTAK ALAN</span><h1>Paranızın nerede olduğunu <em>üçünüz de</em> bilin.</h1><p>Giderler, belgeler ve projeler aynı defterde. Sessiz, düzenli, birlikte.</p></div><div className="auth-stamp">DAVETLİ<br/>EKİP ALANI</div></div><div className="auth-form-wrap"><form className="auth-form" onSubmit={submit}><span className="eyebrow">HOŞ GELDİN</span><h2>Kasaya giriş yap</h2><p>Davet edildiğin e-posta adresini yaz. Sana tek kullanımlık güvenli bir giriş bağlantısı gönderelim.</p>{sent ? <div className="sent-state"><Check /><strong>Gelen kutuna bak</strong><span>Giriş bağlantısını {email} adresine gönderdik.</span></div> : <><label className="field">E-posta adresi<input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="sen@ekip.com" /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading}>{loading ? 'Gönderiliyor…' : 'Giriş bağlantısı gönder'}</button></>}<small className="privacy"><ShieldCheck /> Açık kayıt yoktur. Yalnızca davet edilen kişiler giriş yapabilir.</small></form></div></div>
+  const [email, setEmail] = useState('')
+  const [sent, setSent] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault(); setLoading(true); onError('')
+    const { error: sendError } = await supabase!.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: false, emailRedirectTo: window.location.origin + import.meta.env.BASE_URL },
+    })
+    setLoading(false)
+    if (sendError?.status === 429) onError('Çok fazla deneme yapıldı. Bir dakika bekleyip tekrar deneyin.')
+    else if (sendError) onError('Bu e-posta davetli değil veya giriş bağlantısı gönderilemedi.')
+    else setSent(true)
+  }
+
+  return <div className="auth-page"><div className="auth-art"><div className="brand auth-brand"><div className="brand-mark"><span>₺</span></div><div><strong>ORTAK KASA</strong><small>ekibin para defteri</small></div></div><div className="auth-quote"><span>01 / GÜVENLİ ORTAK ALAN</span><h1>Paranızın nerede olduğunu <em>hepiniz de</em> bilin.</h1><p>Giderler, belgeler ve projeler aynı defterde. Sessiz, düzenli, birlikte.</p></div><div className="auth-stamp">DAVETLİ<br/>EKİP ALANI</div></div><div className="auth-form-wrap"><form className="auth-form" onSubmit={submit}><span className="eyebrow">HOŞ GELDİN</span><h2>Kasaya giriş yap</h2><p>Davet edildiğin e-posta adresini yaz. Sana tek kullanımlık güvenli bir giriş bağlantısı gönderelim.</p>{sent ? <div className="sent-state"><Check /><strong>Gelen kutuna bak</strong><span>En yeni giriş bağlantısını {email} adresine gönderdik.</span></div> : <><label className="field">E-posta adresi<input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="sen@ekip.com" /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading}>{loading ? 'Gönderiliyor…' : 'Giriş bağlantısı gönder'}</button></>}<small className="privacy"><ShieldCheck /> Açık kayıt yoktur. Yalnızca davet edilen kişiler giriş yapabilir.</small></form></div></div>
 }
 
 function ClaimScreen({ onClaim, error, onError }: { onClaim: (name: string, amount: number) => Promise<void>; error: string; onError: (s: string) => void }) {
