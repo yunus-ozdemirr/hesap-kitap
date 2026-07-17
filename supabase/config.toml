@@ -10,10 +10,13 @@ additional_redirect_urls = [
 ]
 enable_signup = false
 
+[auth.rate_limit]
+email_sent = 30
+
 [auth.email]
 enable_signup = true
 enable_confirmations = true
-max_frequency = "1m"
+max_frequency = "10s"
 otp_length = 6
 otp_expiry = 3600
 
