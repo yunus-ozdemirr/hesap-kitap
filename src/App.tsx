@@ -9,8 +9,8 @@ import { supabase, isConfigured } from './lib/supabase'
 import { demoState } from './lib/demo'
 import { calculateLedger, formatMoney, parseMoney } from './lib/money'
 import { isTrustedInviteLink, safeSpreadsheetCell, validateDocumentFile } from './lib/security'
-import { canClaimWorkspace, claimWorkspace, createInvites, createProject, createTransaction, getDocumentUrl, loadLedger, manageMember, updateStartingBalance } from './lib/data'
-import type { LedgerState, Project, Transaction, TransactionInput, TransactionKind } from './types'
+import { claimWorkspace, createInvites, createProject, createTransaction, getDocumentUrl, listWorkspaces, loadLedger, manageMember, updateStartingBalance } from './lib/data'
+import type { LedgerState, Project, Transaction, TransactionInput, TransactionKind, WorkspaceOption } from './types'
 
 type View = 'dashboard' | 'transactions' | 'projects' | 'reports' | 'team'
 
@@ -24,20 +24,28 @@ function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [authReady, setAuthReady] = useState(!isConfigured)
   const [ledger, setLedger] = useState<LedgerState | null>(isConfigured ? null : demoState)
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>(isConfigured ? [] : [{ ...demoState.workspace, role: demoState.role }])
   const [needsClaim, setNeedsClaim] = useState(false)
-  const [needsAccess, setNeedsAccess] = useState(false)
   const [loading, setLoading] = useState(isConfigured)
   const [error, setError] = useState('')
 
-  const refresh = async () => {
+  const refresh = async (requestedWorkspaceId?: string) => {
     if (!isConfigured) return
     setLoading(true)
     try {
-      const next = await loadLedger()
+      const options = await listWorkspaces()
+      setWorkspaces(options)
+      if (!options.length) {
+        setLedger(null)
+        setNeedsClaim(true)
+        return
+      }
+      const saved = requestedWorkspaceId ?? localStorage.getItem('ortak-kasa-workspace') ?? undefined
+      const selectedId = options.some(item => item.id === saved) ? saved! : options[0]!.id
+      const next = await loadLedger(selectedId)
       setLedger(next)
-      const setupAvailable = !next && await canClaimWorkspace()
-      setNeedsClaim(Boolean(setupAvailable))
-      setNeedsAccess(!next && !setupAvailable)
+      setNeedsClaim(false)
+      localStorage.setItem('ortak-kasa-workspace', selectedId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Veriler yüklenemedi')
     } finally { setLoading(false) }
@@ -61,22 +69,23 @@ function App() {
 
   if (!authReady || loading) return <LoadingScreen />
   if (isConfigured && !session) return <LoginScreen onError={setError} error={error} />
-  if (needsAccess) return <AccessPendingScreen email={session?.user.email ?? ''} />
-  if (needsClaim) return <ClaimScreen onClaim={async (name, amount) => { await claimWorkspace(name, amount); await refresh() }} onError={setError} error={error} />
+  if (needsClaim) return <ClaimScreen onClaim={async (name, amount) => { const id = await claimWorkspace(name, amount); await refresh(id) }} onError={setError} error={error} />
   if (!ledger) return <LoadingScreen />
 
-  return <LedgerApp ledger={ledger} setLedger={setLedger} refresh={refresh} session={session} />
+  return <LedgerApp ledger={ledger} workspaces={workspaces} setLedger={setLedger} refresh={refresh} session={session} />
 }
 
-function LedgerApp({ ledger, setLedger, refresh, session }: {
+function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
   ledger: LedgerState
+  workspaces: WorkspaceOption[]
   setLedger: (state: LedgerState) => void
-  refresh: () => Promise<void>
+  refresh: (workspaceId?: string) => Promise<void>
   session: Session | null
 }) {
   const [view, setView] = useState<View>('dashboard')
   const [mobileNav, setMobileNav] = useState(false)
-  const [modal, setModal] = useState<'transaction' | 'project' | 'invite' | 'balance' | 'starting' | 'password' | null>(null)
+  const [modal, setModal] = useState<'transaction' | 'project' | 'invite' | 'balance' | 'starting' | 'password' | 'workspace' | null>(null)
+  const [workspaceMenu, setWorkspaceMenu] = useState(false)
   const [toast, setToast] = useState('')
   const [search, setSearch] = useState('')
   const metrics = useMemo(() => calculateLedger(ledger.transactions), [ledger.transactions])
@@ -175,7 +184,7 @@ function LedgerApp({ ledger, setLedger, refresh, session }: {
           <div className="brand-mark"><span>₺</span></div>
           <div><strong>ORTAK KASA</strong><small>ekibin para defteri</small></div>
         </div>
-        <div className="workspace-chip"><span className="live-dot" />{ledger.workspace.name}<ChevronDown size={14} /></div>
+        <div className="workspace-switcher"><button className="workspace-chip" onClick={() => setWorkspaceMenu(value => !value)} aria-expanded={workspaceMenu}><span className="live-dot" /><span>{ledger.workspace.name}</span><ChevronDown size={14} /></button>{workspaceMenu && <div className="workspace-menu"><span>KASALARIN</span>{workspaces.map(item => <button key={item.id} className={item.id === ledger.workspace.id ? 'selected' : ''} onClick={async () => { setWorkspaceMenu(false); await refresh(item.id) }}><i>{item.name.slice(0, 2).toUpperCase()}</i><div><strong>{item.name}</strong><small>{roleLabel[item.role]}</small></div>{item.id === ledger.workspace.id && <Check size={15} />}</button>)}<button className="workspace-create" onClick={() => { setWorkspaceMenu(false); setModal('workspace') }}><Plus size={15} /> Yeni kasa oluştur</button></div>}</div>
         <nav>
           <span className="nav-caption">KASA DEFTERİ</span>
           {nav.map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => { setView(item.id); setMobileNav(false) }}><item.icon size={19} />{item.label}</button>)}
@@ -213,6 +222,7 @@ function LedgerApp({ ledger, setLedger, refresh, session }: {
       {modal === 'starting' && <BalanceModal mode="starting" currentBalance={ledger.workspace.starting_balance_minor} onClose={() => setModal(null)} onSave={changeStartingBalance} />}
       {modal === 'invite' && <InviteModal workspaceId={ledger.workspace.id} onClose={() => setModal(null)} onDone={completeInvites} />}
       {modal === 'password' && <PasswordModal onClose={() => setModal(null)} onDone={() => { setModal(null); notify('Şifreniz kaydedildi') }} />}
+      {modal === 'workspace' && <CreateWorkspaceModal onClose={() => setModal(null)} onCreate={async (name, amount) => { const id = await claimWorkspace(name, amount); setModal(null); await refresh(id); notify('Yeni kasa oluşturuldu') }} />}
       {toast && <div className="toast"><Check size={18} />{toast}</div>}
     </div>
   )
@@ -371,6 +381,7 @@ function LoginScreen({ error, onError }: { error: string; onError: (s: string) =
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault(); setLoading(true); onError('')
@@ -379,7 +390,7 @@ function LoginScreen({ error, onError }: { error: string; onError: (s: string) =
     if (signInError) onError('E-posta veya şifre hatalı. İlk girişte davet bağlantınızı kullanıp bir şifre belirleyin.')
   }
 
-  return <div className="auth-page"><div className="auth-art"><div className="brand auth-brand"><div className="brand-mark"><span>₺</span></div><div><strong>ORTAK KASA</strong><small>ekibin para defteri</small></div></div><div className="auth-quote"><span>01 / GÜVENLİ ORTAK ALAN</span><h1>Paranızın nerede olduğunu <em>hepiniz de</em> bilin.</h1><p>Giderler, belgeler ve projeler aynı defterde. Sessiz, düzenli, birlikte.</p></div><div className="auth-stamp">DAVETLİ<br/>EKİP ALANI</div></div><div className="auth-form-wrap"><form className="auth-form" onSubmit={submit}><span className="eyebrow">HOŞ GELDİN</span><h2>Kasaya giriş yap</h2><p>İlk girişte davet bağlantını kullan. Sonraki girişlerde e-posta ve şifren yeterli.</p><label className="field">E-posta adresi<input required type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="sen@ekip.com" /></label><label className="field">Şifre<input required type="password" autoComplete="current-password" minLength={10} value={password} onChange={e => setPassword(e.target.value)} placeholder="En az 10 karakter" /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading}>{loading ? 'Giriş yapılıyor…' : 'Şifreyle giriş yap'}</button><small className="privacy"><ShieldCheck /> Açık kayıt yoktur. Yalnızca davet edilen kişiler giriş yapabilir.</small></form></div></div>
+  return <div className="auth-page"><div className="auth-art"><div className="brand auth-brand"><div className="brand-mark"><span>₺</span></div><div><strong>ORTAK KASA</strong><small>ekibin para defteri</small></div></div><div className="auth-quote"><span>01 / GÜVENLİ ORTAK ALAN</span><h1>Paranızın nerede olduğunu <em>hepiniz de</em> bilin.</h1><p>Giderler, belgeler ve projeler aynı defterde. Sessiz, düzenli, birlikte.</p></div><div className="auth-stamp">HER EKİBE<br/>AYRI KASA</div></div><div className="auth-form-wrap"><form className="auth-form" onSubmit={submit}><span className="eyebrow">HOŞ GELDİN</span><h2>Kasaya giriş yap</h2><p>Google ile yeni hesap açabilir veya mevcut Ortak Kasa şifrenle giriş yapabilirsin.</p><button type="button" className="google-button" disabled={googleLoading} onClick={async () => { setGoogleLoading(true); onError(''); const { error: oauthError } = await supabase!.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin + import.meta.env.BASE_URL } }); if (oauthError) { onError('Google girişi henüz yapılandırılmadı veya başlatılamadı.'); setGoogleLoading(false) } }}><span className="google-mark"><i>G</i></span>{googleLoading ? 'Google açılıyor…' : 'Google ile kayıt ol / giriş yap'}</button><div className="auth-divider"><span>veya mevcut hesabınla</span></div><label className="field">E-posta adresi<input required type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="sen@ekip.com" /></label><label className="field">Ortak Kasa şifresi<input required type="password" autoComplete="current-password" minLength={10} value={password} onChange={e => setPassword(e.target.value)} placeholder="En az 10 karakter" /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading}>{loading ? 'Giriş yapılıyor…' : 'Şifreyle giriş yap'}</button><small className="privacy"><ShieldCheck /> Google şifren bu uygulamayla paylaşılmaz.</small></form></div></div>
 }
 
 function PasswordModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
@@ -390,16 +401,21 @@ function PasswordModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
   return <Modal title="Giriş şifreni belirle" subtitle="Bundan sonra davet bağlantısına ihtiyaç duymadan giriş yap." onClose={onClose}><form className="form-stack" onSubmit={async e => { e.preventDefault(); setError(''); if (password.length < 10) { setError('Şifre en az 10 karakter olmalı.'); return } if (password !== again) { setError('Şifreler aynı değil.'); return } setSaving(true); const { error: updateError } = await supabase!.auth.updateUser({ password, data: { has_password: true } }); setSaving(false); if (updateError) setError(updateError.message); else onDone() }}><label className="field">Yeni şifre<input required type="password" autoComplete="new-password" minLength={10} value={password} onChange={e => setPassword(e.target.value)} placeholder="En az 10 karakter" /></label><label className="field">Yeni şifre tekrar<input required type="password" autoComplete="new-password" minLength={10} value={again} onChange={e => setAgain(e.target.value)} /></label><div className="inline-note"><ShieldCheck /><p>Benzersiz bir şifre kullanın. Şifrenizi belirledikten sonra e-posta kotası veya owner yardımı olmadan giriş yapabilirsiniz.</p></div>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onClose}>Vazgeç</button><button className="primary-button" disabled={saving}>{saving ? 'Kaydediliyor…' : 'Şifreyi kaydet'}</button></div></form></Modal>
 }
 
+function CreateWorkspaceModal({ onClose, onCreate }: { onClose: () => void; onCreate: (name: string, amount: number) => Promise<void> }) {
+  const [name, setName] = useState('Yeni Proje Kasası')
+  const [amount, setAmount] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const initialMinor = parseMoney(amount)
+  return <Modal title="Yeni kasa oluştur" subtitle="Bu kasa diğer kasalardan tamamen bağımsız ve yalnız davet ettiğin kişilere açık olacak." onClose={onClose}><form className="form-stack" onSubmit={async e => { e.preventDefault(); setError(''); if (name.trim().length < 2 || initialMinor <= 0) { setError('Kasa adı ve sıfırdan büyük başlangıç bakiyesi gerekli.'); return } setSaving(true); try { await onCreate(name.trim(), initialMinor) } catch (err) { setError(err instanceof Error ? err.message : 'Kasa oluşturulamadı') } finally { setSaving(false) } }}><label className="field">Kasa adı<input required minLength={2} maxLength={80} value={name} onChange={e => setName(e.target.value)} /></label><div className="amount-field"><label>Başlangıç bakiyesi</label><div><span>₺</span><input required inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0,00" /></div></div><div className="inline-note"><ShieldCheck /><p>Her kasanın hareketleri, üyeleri, projeleri ve belgeleri RLS ile birbirinden ayrılır.</p></div>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onClose}>Vazgeç</button><button className="primary-button" disabled={saving || initialMinor <= 0}>{saving ? 'Oluşturuluyor…' : 'Kasayı oluştur'}</button></div></form></Modal>
+}
+
 function ClaimScreen({ onClaim, error, onError }: { onClaim: (name: string, amount: number) => Promise<void>; error: string; onError: (s: string) => void }) {
   const [loading, setLoading] = useState(false)
   const [name, setName] = useState('Proje Kasası')
   const [amount, setAmount] = useState('')
   const initialMinor = parseMoney(amount)
   return <div className="claim-page"><form className="claim-card" onSubmit={async e => { e.preventDefault(); if (!initialMinor) { onError('Başlangıç bakiyesi sıfırdan büyük olmalı.'); return } setLoading(true); onError(''); try { await onClaim(name.trim(), initialMinor) } catch (err) { onError(err instanceof Error ? err.message : 'Kurulum tamamlanamadı') } finally { setLoading(false) } }}><div className="brand-mark big"><span>₺</span></div><span className="eyebrow">İLK KURULUM</span><h1>Kasanı oluştur</h1><p>Kasanın adını ve başlangıç parasını belirle. Yüzde göstergesi bu tutara göre hesaplanacak; bakiyeyi daha sonra güvenli fark kaydıyla değiştirebilirsin.</p><label className="field left-field">Kasa adı<input required minLength={2} maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="Örn. Dernek Proje Kasası" /></label><div className="amount-field claim-amount"><label>Başlangıç bakiyesi</label><div><span>₺</span><input required inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0,00" /></div></div>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading || !initialMinor}>{loading ? 'Hazırlanıyor…' : 'Kasayı oluştur'}</button></form></div>
-}
-
-function AccessPendingScreen({ email }: { email: string }) {
-  return <div className="claim-page"><div className="claim-card"><div className="brand-mark big"><span>₺</span></div><span className="eyebrow">ERİŞİM BEKLİYOR</span><h1>Bu hesap bir kasaya bağlı değil</h1><p><strong>{email}</strong> adresiyle giriş yaptınız. Kasa sahibinden bu adres için davet bağlantısı isteyin veya doğru hesabınızla tekrar giriş yapın.</p><button className="primary-button wide" onClick={() => supabase?.auth.signOut()}>Farklı hesapla giriş yap</button></div></div>
 }
 
 function LoadingScreen() { return <div className="loading-page"><div className="ledger-loader"><span>₺</span></div><p>Kasa defteri açılıyor…</p></div> }

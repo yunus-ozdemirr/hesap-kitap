@@ -10,6 +10,10 @@ export interface Workspace {
   starting_balance_minor: number
 }
 
+export interface WorkspaceOption extends Workspace {
+  role: Role
+}
+
 export interface Member {
   user_id: string
   display_name: string

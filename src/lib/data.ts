@@ -1,13 +1,28 @@
 import { supabase } from './supabase'
-import type { LedgerState, Project, Transaction, TransactionInput } from '../types'
+import type { LedgerState, Project, Transaction, TransactionInput, WorkspaceOption } from '../types'
 
-export async function loadLedger(): Promise<LedgerState | null> {
+export async function listWorkspaces(): Promise<WorkspaceOption[]> {
+  if (!supabase) return []
+  const { data: memberships, error: memberError } = await supabase
+    .from('workspace_members').select('workspace_id, role, display_name')
+  if (memberError) throw memberError
+  if (!memberships?.length) return []
+  const ids = memberships.map(item => item.workspace_id)
+  const { data: workspaces, error } = await supabase.from('workspaces').select('*').in('id', ids).order('created_at')
+  if (error) throw error
+  return (workspaces ?? []).map(workspace => ({
+    ...workspace,
+    role: memberships.find(item => item.workspace_id === workspace.id)!.role,
+  })) as WorkspaceOption[]
+}
+
+export async function loadLedger(preferredWorkspaceId?: string): Promise<LedgerState | null> {
   if (!supabase) return null
   const { data: memberships, error: memberError } = await supabase
-    .from('workspace_members').select('workspace_id, role, display_name').limit(1)
+    .from('workspace_members').select('workspace_id, role, display_name')
   if (memberError) throw memberError
   if (!memberships?.length) return null
-  const membership = memberships[0]
+  const membership = memberships.find(item => item.workspace_id === preferredWorkspaceId) ?? memberships[0]
   const workspaceId = membership.workspace_id
 
   const [workspaceResult, membersResult, projectsResult, transactionsResult] = await Promise.all([
@@ -30,18 +45,12 @@ export async function loadLedger(): Promise<LedgerState | null> {
 
 export async function claimWorkspace(workspaceName: string, initialBalanceMinor: number) {
   if (!supabase) throw new Error('Supabase bağlı değil')
-  const { error } = await supabase.rpc('claim_initial_workspace', {
+  const { data, error } = await supabase.rpc('create_workspace', {
     workspace_name: workspaceName,
     initial_balance_minor: initialBalanceMinor,
   })
   if (error) throw error
-}
-
-export async function canClaimWorkspace() {
-  if (!supabase) return false
-  const { data, error } = await supabase.rpc('workspace_setup_available')
-  if (error) throw error
-  return Boolean(data)
+  return data as string
 }
 
 export async function updateStartingBalance(workspaceId: string, newBalanceMinor: number) {

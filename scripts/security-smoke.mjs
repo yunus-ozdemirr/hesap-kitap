@@ -55,6 +55,18 @@ try {
   const viewer = await clientFor(emails.viewer)
   const outsider = await clientFor(emails.outsider)
 
+  const outsiderWorkspace = await outsider.rpc('create_workspace', { workspace_name: `Independent ${stamp}`, initial_balance_minor: 250000 })
+  assert(!outsiderWorkspace.error && Boolean(outsiderWorkspace.data), 'Doğrulanmış yeni kullanıcı bağımsız kasa oluşturabiliyor')
+  workspaceIds.push(outsiderWorkspace.data)
+  const ownerSecondWorkspace = await owner.rpc('create_workspace', { workspace_name: `Owner second ${stamp}`, initial_balance_minor: 300000 })
+  assert(!ownerSecondWorkspace.error && Boolean(ownerSecondWorkspace.data), 'Bir kullanıcı birden fazla kasa oluşturabiliyor')
+  workspaceIds.push(ownerSecondWorkspace.data)
+  const ownerMemberships = await owner.from('workspace_members').select('workspace_id').in('workspace_id', [first.data.id, ownerSecondWorkspace.data])
+  const ownerWorkspaceIds = ownerMemberships.data?.map(item => item.workspace_id) ?? []
+  assert(!ownerMemberships.error && ownerWorkspaceIds.includes(first.data.id) && ownerWorkspaceIds.includes(ownerSecondWorkspace.data), 'Kullanıcı birden fazla kasaya üye olabiliyor')
+  const isolatedIndependent = await owner.from('workspaces').select('id').eq('id', outsiderWorkspace.data)
+  assert(!isolatedIndependent.error && isolatedIndependent.data.length === 0, 'Bağımsız kasalar diğer kullanıcılardan izole')
+
   const anonRead = await anon.from('workspaces').select('id').eq('id', first.data.id)
   assert(!anonRead.error && anonRead.data.length === 0, 'Anon kullanıcı kasa verisini okuyamıyor')
   const outsiderRead = await outsider.from('workspaces').select('id').eq('id', first.data.id)

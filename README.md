@@ -1,5 +1,18 @@
 # Ortak Kasa
 
+## Google ile herkese açık kayıt
+
+Uygulama Google OAuth ile yeni kullanıcı kaydı, bağımsız kasa oluşturma, birden fazla kasaya üyelik ve kasalar arasında geçişi destekler. Google sağlayıcısını bir kez yapılandırmak gerekir:
+
+1. Google Cloud Console → **APIs & Services → OAuth consent screen** bölümünde uygulamayı oluşturun.
+2. **Credentials → Create credentials → OAuth client ID → Web application** seçin.
+3. Authorized JavaScript origin olarak `https://hdmnwcgispxcwkjpryxu.supabase.co` ekleyin.
+4. Authorized redirect URI olarak `https://hdmnwcgispxcwkjpryxu.supabase.co/auth/v1/callback` ekleyin.
+5. Supabase Dashboard → **Authentication → Providers → Google** bölümünü açın.
+6. Google Client ID ve Client Secret değerlerini yalnız Supabase paneline girip sağlayıcıyı etkinleştirin.
+
+Client Secret GitHub değişkenlerine, `.env` dosyasına veya tarayıcı koduna konmamalıdır. Google şifresi uygulamayla paylaşılmaz; kimlik doğrulama Google sayfasında gerçekleşir.
+
 Öğrenci grupları, dernekler, küçük ekipler ve proje toplulukları için ortak kasa, gider ve belge takip uygulaması. Arayüz GitHub Pages'te, veriler Supabase PostgreSQL ve özel Storage alanında çalışır.
 
 ## Neler hazır?
