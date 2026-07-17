@@ -9,6 +9,7 @@ additional_redirect_urls = [
   "http://127.0.0.1:5173/**",
 ]
 enable_signup = false
+minimum_password_length = 10
 
 [auth.rate_limit]
 email_sent = 30
@@ -25,4 +26,7 @@ enroll_enabled = true
 verify_enabled = true
 
 [functions.invite-user]
+verify_jwt = true
+
+[functions.upload-document]
 verify_jwt = true

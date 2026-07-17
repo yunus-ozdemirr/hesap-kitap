@@ -3,6 +3,11 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './styles.css'
 
+if (window.self !== window.top) {
+  document.documentElement.replaceChildren()
+  throw new Error('Uygulamanın başka bir site içinde açılması engellendi.')
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />

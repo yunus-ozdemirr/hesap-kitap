@@ -52,16 +52,13 @@ export async function createTransaction(workspaceId: string, input: TransactionI
   if (error) throw error
 
   if (file) {
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-')
-    const path = `${workspaceId}/${data.id}/${crypto.randomUUID()}-${safeName}`
-    const upload = await supabase.storage.from('documents').upload(path, file, { contentType: file.type })
+    const form = new FormData()
+    form.set('workspaceId', workspaceId)
+    form.set('transactionId', data.id)
+    form.set('file', file)
+    const upload = await supabase.functions.invoke('upload-document', { body: form })
     if (upload.error) throw upload.error
-    const documentType = file.type === 'application/pdf' ? 'invoice' : 'receipt'
-    const document = await supabase.from('documents').insert({
-      workspace_id: workspaceId, transaction_id: data.id, document_type: documentType,
-      storage_path: path, mime_type: file.type, file_size: file.size,
-    })
-    if (document.error) throw document.error
+    if (upload.data?.error) throw new Error(upload.data.error)
   }
   return data as Transaction
 }
@@ -76,7 +73,7 @@ export async function createProject(workspaceId: string, project: Pick<Project, 
 export async function createInvites(workspaceId: string, emails: string[], role: 'editor' | 'viewer') {
   if (!supabase) throw new Error('Supabase bağlı değil')
   const { data, error } = await supabase.functions.invoke('invite-user', {
-    body: { workspaceId, emails, role, redirectTo: window.location.origin + import.meta.env.BASE_URL },
+    body: { workspaceId, emails, role },
   })
   if (error) throw error
   return data as {
@@ -98,7 +95,7 @@ export async function manageMember(workspaceId: string, userId: string, action: 
 
 export async function getDocumentUrl(path: string) {
   if (!supabase) return null
-  const { data, error } = await supabase.storage.from('documents').createSignedUrl(path, 60)
+  const { data, error } = await supabase.storage.from('documents').createSignedUrl(path, 60, { download: true })
   if (error) throw error
   return data.signedUrl
 }
