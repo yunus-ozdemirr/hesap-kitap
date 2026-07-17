@@ -79,8 +79,11 @@ export async function createInvites(workspaceId: string, emails: string[], role:
     body: { workspaceId, emails, role, redirectTo: window.location.origin + import.meta.env.BASE_URL },
   })
   if (error) throw error
-  if (data?.failures?.length) throw new Error(`${data.successes?.length ?? 0} davet gönderildi; ${data.failures.length} adres başarısız oldu: ${data.failures.map((item: { email: string }) => item.email).join(', ')}`)
-  return data as { successes: string[]; failures: Array<{ email: string; message: string }> }
+  return data as {
+    successes: string[]
+    failures: Array<{ email: string; message: string }>
+    links: Array<{ email: string; actionLink: string }>
+  }
 }
 
 export async function getDocumentUrl(path: string) {

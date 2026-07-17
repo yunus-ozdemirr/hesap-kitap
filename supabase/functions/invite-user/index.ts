@@ -49,6 +49,7 @@ Deno.serve(async (request) => {
 
     const successes: string[] = []
     const failures: Array<{ email: string; message: string }> = []
+    const links: Array<{ email: string; actionLink: string }> = []
     const redirectTo = Deno.env.get('APP_URL') || body.redirectTo
 
     for (const email of emails) {
@@ -60,13 +61,21 @@ Deno.serve(async (request) => {
             display_name: existing.user_metadata?.full_name || email.split('@')[0], role: body.role,
           }, { onConflict: 'workspace_id,user_id' })
           if (error) throw error
+          const { data: linkData, error: linkError } = await adminClient.auth.admin.generateLink({
+            type: 'magiclink', email, options: redirectTo ? { redirectTo } : undefined,
+          })
+          if (linkError) throw linkError
+          links.push({ email, actionLink: linkData.properties.action_link })
         } else {
           const { error: allowError } = await adminClient.from('workspace_invites').upsert({
             workspace_id: body.workspaceId, email, role: body.role, created_by: user.id,
           }, { onConflict: 'workspace_id,email' })
           if (allowError) throw allowError
-          const { error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(email, redirectTo ? { redirectTo } : undefined)
-          if (inviteError) throw inviteError
+          const { data: linkData, error: linkError } = await adminClient.auth.admin.generateLink({
+            type: 'invite', email, options: redirectTo ? { redirectTo } : undefined,
+          })
+          if (linkError) throw linkError
+          links.push({ email, actionLink: linkData.properties.action_link })
         }
         successes.push(email)
       } catch (error) {
@@ -74,7 +83,7 @@ Deno.serve(async (request) => {
       }
     }
 
-    return json({ successes, failures })
+    return json({ successes, failures, links })
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : 'Sunucu hatası' }, 500)
   }
