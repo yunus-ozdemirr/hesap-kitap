@@ -28,6 +28,7 @@ function App() {
   const [needsClaim, setNeedsClaim] = useState(false)
   const [loading, setLoading] = useState(isConfigured)
   const [error, setError] = useState('')
+  const [isRecoveringPassword, setIsRecoveringPassword] = useState(() => window.location.hash.includes('type=recovery'))
 
   const refresh = async (requestedWorkspaceId?: string) => {
     if (!isConfigured) return
@@ -59,7 +60,8 @@ function App() {
       if (data.session) refresh()
       else setLoading(false)
     })
-    const { data } = supabase.auth.onAuthStateChange((_event, next) => {
+    const { data } = supabase.auth.onAuthStateChange((event, next) => {
+      if (event === 'PASSWORD_RECOVERY') setIsRecoveringPassword(true)
       setSession(next)
       if (next) setTimeout(refresh, 0)
       else setLedger(null)
@@ -68,6 +70,7 @@ function App() {
   }, [])
 
   if (!authReady || loading) return <LoadingScreen />
+  if (isConfigured && session && isRecoveringPassword) return <ResetPasswordScreen onDone={() => setIsRecoveringPassword(false)} />
   if (isConfigured && !session) return <LoginScreen onError={setError} error={error} />
   if (needsClaim) return <ClaimScreen onClaim={async (name, amount) => { const id = await claimWorkspace(name, amount); await refresh(id) }} onError={setError} error={error} />
   if (!ledger) return <LoadingScreen />
@@ -378,19 +381,61 @@ function Modal({ title, subtitle, onClose, children }: { title: string; subtitle
 }
 
 function LoginScreen({ error, onError }: { error: string; onError: (s: string) => void }) {
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [again, setAgain] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
+  const [notice, setNotice] = useState('')
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault(); setLoading(true); onError('')
-    const { error: signInError } = await supabase!.auth.signInWithPassword({ email, password })
-    setLoading(false)
-    if (signInError) onError('E-posta veya şifre hatalı. İlk girişte davet bağlantınızı kullanıp bir şifre belirleyin.')
+  const changeMode = (next: 'login' | 'register' | 'forgot') => {
+    setMode(next); setPassword(''); setAgain(''); setNotice(''); onError('')
   }
 
-  return <div className="auth-page"><div className="auth-art"><div className="brand auth-brand"><div className="brand-mark"><span>₺</span></div><div><strong>ORTAK KASA</strong><small>ekibin para defteri</small></div></div><div className="auth-quote"><span>01 / GÜVENLİ ORTAK ALAN</span><h1>Paranızın nerede olduğunu <em>hepiniz de</em> bilin.</h1><p>Giderler, belgeler ve projeler aynı defterde. Sessiz, düzenli, birlikte.</p></div><div className="auth-stamp">HER EKİBE<br/>AYRI KASA</div></div><div className="auth-form-wrap"><form className="auth-form" onSubmit={submit}><span className="eyebrow">HOŞ GELDİN</span><h2>Kasaya giriş yap</h2><p>Google ile yeni hesap açabilir veya mevcut Ortak Kasa şifrenle giriş yapabilirsin.</p><button type="button" className="google-button" disabled={googleLoading} onClick={async () => { setGoogleLoading(true); onError(''); const { error: oauthError } = await supabase!.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin + import.meta.env.BASE_URL } }); if (oauthError) { onError('Google girişi henüz yapılandırılmadı veya başlatılamadı.'); setGoogleLoading(false) } }}><span className="google-mark"><i>G</i></span>{googleLoading ? 'Google açılıyor…' : 'Google ile kayıt ol / giriş yap'}</button><div className="auth-divider"><span>veya mevcut hesabınla</span></div><label className="field">E-posta adresi<input required type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="sen@ekip.com" /></label><label className="field">Ortak Kasa şifresi<input required type="password" autoComplete="current-password" minLength={10} value={password} onChange={e => setPassword(e.target.value)} placeholder="En az 10 karakter" /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading}>{loading ? 'Giriş yapılıyor…' : 'Şifreyle giriş yap'}</button><small className="privacy"><ShieldCheck /> Google şifren bu uygulamayla paylaşılmaz.</small></form></div></div>
+  const googleAuth = async () => {
+    setGoogleLoading(true); onError(''); setNotice('')
+    const { error: oauthError } = await supabase!.auth.signInWithOAuth({
+      provider: 'google', options: { redirectTo: window.location.origin + import.meta.env.BASE_URL },
+    })
+    if (oauthError) { onError('Google ile bağlantı başlatılamadı. Lütfen yeniden deneyin.'); setGoogleLoading(false) }
+  }
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault(); setLoading(true); onError(''); setNotice('')
+    const normalizedEmail = email.trim().toLowerCase()
+    if (mode === 'forgot') {
+      const { error: resetError } = await supabase!.auth.resetPasswordForEmail(normalizedEmail, { redirectTo: window.location.origin + import.meta.env.BASE_URL })
+      setLoading(false)
+      if (resetError) onError(resetError.message.includes('rate') ? 'Çok fazla istek gönderildi. Birkaç dakika sonra yeniden deneyin.' : 'Sıfırlama bağlantısı gönderilemedi.')
+      else setNotice('Şifre yenileme bağlantısı gönderildi. Gelen kutunu ve spam klasörünü kontrol et.')
+      return
+    }
+    if (mode === 'register') {
+      if (password.length < 10) { setLoading(false); onError('Şifre en az 10 karakter olmalı.'); return }
+      if (password !== again) { setLoading(false); onError('Şifreler aynı değil.'); return }
+      const { data, error: signUpError } = await supabase!.auth.signUp({ email: normalizedEmail, password, options: { emailRedirectTo: window.location.origin + import.meta.env.BASE_URL } })
+      setLoading(false)
+      if (signUpError) onError(signUpError.message.includes('already') ? 'Bu e-posta zaten kayıtlı. Giriş yapmayı veya şifre sıfırlamayı dene.' : signUpError.message)
+      else if (!data.session) setNotice('Kaydın alındı. E-postana gelen doğrulama bağlantısına tıkla, sonra giriş yap.')
+      return
+    }
+    const { error: signInError } = await supabase!.auth.signInWithPassword({ email: normalizedEmail, password })
+    setLoading(false)
+    if (signInError) onError('E-posta veya uygulama şifresi hatalı. Google şifren burada geçmez; gerekirse “Şifremi unuttum”u kullan.')
+  }
+
+  const isLogin = mode === 'login'
+  const isRegister = mode === 'register'
+  return <div className="auth-page"><div className="auth-art"><div className="brand auth-brand"><div className="brand-mark"><span>₺</span></div><div><strong>ORTAK KASA</strong><small>ekibin para defteri</small></div></div><div className="auth-quote"><span>01 / GÜVENLİ ORTAK ALAN</span><h1>Paranızın nerede olduğunu <em>hepiniz de</em> bilin.</h1><p>Giderler, belgeler ve projeler aynı defterde. Sessiz, düzenli, birlikte.</p></div><div className="auth-stamp">HER EKİBE<br/>AYRI KASA</div></div><div className="auth-form-wrap"><form className="auth-form" onSubmit={submit}><div className="auth-tabs" aria-label="Hesap işlemleri"><button type="button" className={isLogin ? 'active' : ''} onClick={() => changeMode('login')}>Giriş yap</button><button type="button" className={isRegister ? 'active' : ''} onClick={() => changeMode('register')}>Kayıt ol</button></div><span className="eyebrow">{isLogin ? 'HOŞ GELDİN' : isRegister ? 'YENİ HESAP' : 'HESAP KURTARMA'}</span><h2>{isLogin ? 'Kasaya giriş yap' : isRegister ? 'Hesabını oluştur' : 'Şifreni yenile'}</h2><p>{isLogin ? 'Mevcut hesabınla güvenli biçimde devam et.' : isRegister ? 'Kendi kasanı oluşturmak veya bir ekibe katılmak için ücretsiz hesap aç.' : 'E-postana tek kullanımlık bir şifre yenileme bağlantısı gönderelim.'}</p>{mode !== 'forgot' && <><button type="button" className="google-button" disabled={googleLoading} onClick={googleAuth}><span className="google-mark"><i>G</i></span>{googleLoading ? 'Google açılıyor…' : isRegister ? 'Google ile kayıt ol' : 'Google ile giriş yap'}</button><div className="auth-divider"><span>veya e-posta ile</span></div></>}<label className="field">E-posta adresi<input required type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="sen@ekip.com" /></label>{mode !== 'forgot' && <label className="field">Uygulama şifresi<input required type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} minLength={10} value={password} onChange={e => setPassword(e.target.value)} placeholder="En az 10 karakter" /></label>}{isRegister && <label className="field">Şifre tekrar<input required type="password" autoComplete="new-password" minLength={10} value={again} onChange={e => setAgain(e.target.value)} placeholder="Şifreni yeniden yaz" /></label>}{notice && <p className="form-success"><Check />{notice}</p>}{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading}>{loading ? 'İşlem yapılıyor…' : isLogin ? 'Şifreyle giriş yap' : isRegister ? 'E-posta ile kayıt ol' : 'Yenileme bağlantısı gönder'}</button>{isLogin && <button type="button" className="auth-text-link" onClick={() => changeMode('forgot')}>Şifremi unuttum</button>}{mode === 'forgot' && <button type="button" className="auth-text-link" onClick={() => changeMode('login')}>Giriş ekranına dön</button>}<small className="privacy"><ShieldCheck /> Şifrelerin şifreli kimlik hizmetinde korunur.</small></form></div></div>
+}
+
+function ResetPasswordScreen({ onDone }: { onDone: () => void }) {
+  const [password, setPassword] = useState('')
+  const [again, setAgain] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  return <div className="claim-page"><form className="claim-card reset-card" onSubmit={async e => { e.preventDefault(); setError(''); if (password.length < 10) { setError('Şifre en az 10 karakter olmalı.'); return } if (password !== again) { setError('Şifreler aynı değil.'); return } setSaving(true); const { error: updateError } = await supabase!.auth.updateUser({ password, data: { has_password: true } }); setSaving(false); if (updateError) setError('Şifre kaydedilemedi. Bağlantının süresi dolmuş olabilir.'); else onDone() }}><div className="brand-mark big"><span>₺</span></div><span className="eyebrow">GÜVENLİ YENİLEME</span><h1>Yeni şifreni belirle</h1><p>Bu şifre yalnız Ortak Kasa içindir; Google hesabının şifresinden farklı olabilir.</p><label className="field left-field">Yeni şifre<input required type="password" autoComplete="new-password" minLength={10} value={password} onChange={e => setPassword(e.target.value)} placeholder="En az 10 karakter" /></label><label className="field left-field">Yeni şifre tekrar<input required type="password" autoComplete="new-password" minLength={10} value={again} onChange={e => setAgain(e.target.value)} /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={saving}>{saving ? 'Kaydediliyor…' : 'Şifreyi kaydet ve devam et'}</button></form></div>
 }
 
 function PasswordModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
