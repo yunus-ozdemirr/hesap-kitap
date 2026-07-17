@@ -1,0 +1,4 @@
+project_id = "ortak-kasa"
+
+[functions.invite-user]
+verify_jwt = true
