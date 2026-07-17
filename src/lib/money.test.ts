@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateLedger } from './money'
+import { calculateLedger, parseMoney } from './money'
 import type { Transaction } from '../types'
 
 const tx = (overrides: Partial<Transaction>): Transaction => ({
@@ -9,6 +9,13 @@ const tx = (overrides: Partial<Transaction>): Transaction => ({
 })
 
 describe('kasa hesapları', () => {
+  it('Türkçe ve para sembollü tutarları kuruşa çevirir', () => {
+    expect(parseMoney('1.178₺')).toBe(117_800)
+    expect(parseMoney('₺ 1.178,50')).toBe(117_850)
+    expect(parseMoney('1178,50')).toBe(117_850)
+    expect(parseMoney('1178.50')).toBe(117_850)
+  })
+
   it('açılış ve grup giderini hesaplar', () => {
     const result = calculateLedger([tx({ kind: 'opening', amount_minor: 1_000_000 }), tx({ amount_minor: 50_000 })])
     expect(result.balance).toBe(950_000)

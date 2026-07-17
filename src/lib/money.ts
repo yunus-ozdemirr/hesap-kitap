@@ -4,7 +4,21 @@ export const formatMoney = (minor: number) =>
   new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 2 }).format(minor / 100)
 
 export const parseMoney = (value: string) => {
-  const normalized = value.trim().replace(/\./g, '').replace(',', '.')
+  const raw = value.trim().replace(/[^\d,.-]/g, '')
+  if (!raw) return 0
+  const lastComma = raw.lastIndexOf(',')
+  const lastDot = raw.lastIndexOf('.')
+  let normalized = raw
+  if (lastComma >= 0 && lastDot >= 0) {
+    const decimalSeparator = lastComma > lastDot ? ',' : '.'
+    const groupingSeparator = decimalSeparator === ',' ? '.' : ','
+    normalized = raw.replaceAll(groupingSeparator, '').replace(decimalSeparator, '.')
+  } else if (lastComma >= 0) {
+    normalized = raw.replace(/\./g, '').replace(',', '.')
+  } else if (lastDot >= 0) {
+    const fractionLength = raw.length - lastDot - 1
+    normalized = fractionLength === 3 ? raw.replace(/\./g, '') : raw
+  }
   const amount = Number(normalized)
   return Number.isFinite(amount) ? Math.round(amount * 100) : 0
 }
