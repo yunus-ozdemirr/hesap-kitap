@@ -32,7 +32,6 @@ function App() {
 
   const refresh = async (requestedWorkspaceId?: string) => {
     if (!isConfigured) return
-    setLoading(true)
     try {
       const options = await listWorkspaces()
       setWorkspaces(options)
@@ -63,8 +62,8 @@ function App() {
     const { data } = supabase.auth.onAuthStateChange((event, next) => {
       if (event === 'PASSWORD_RECOVERY') setIsRecoveringPassword(true)
       setSession(next)
-      if (next) setTimeout(refresh, 0)
-      else setLedger(null)
+      if (!next) setLedger(null)
+      else if (event === 'SIGNED_IN') setTimeout(refresh, 0)
     })
     return () => data.subscription.unsubscribe()
   }, [])
@@ -85,7 +84,10 @@ function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
   refresh: (workspaceId?: string) => Promise<void>
   session: Session | null
 }) {
-  const [view, setView] = useState<View>('dashboard')
+  const [view, setView] = useState<View>(() => {
+    const saved = localStorage.getItem('ortak-kasa-view')
+    return saved && ['dashboard', 'transactions', 'projects', 'reports', 'team'].includes(saved) ? saved as View : 'dashboard'
+  })
   const [mobileNav, setMobileNav] = useState(false)
   const [modal, setModal] = useState<'transaction' | 'project' | 'invite' | 'balance' | 'starting' | 'password' | 'workspace' | null>(null)
   const [workspaceMenu, setWorkspaceMenu] = useState(false)
@@ -93,6 +95,8 @@ function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
   const [search, setSearch] = useState('')
   const metrics = useMemo(() => calculateLedger(ledger.transactions), [ledger.transactions])
   const canEdit = ledger.role === 'owner' || ledger.role === 'editor'
+
+  useEffect(() => { localStorage.setItem('ortak-kasa-view', view) }, [view])
 
   const notify = (message: string) => {
     setToast(message)
