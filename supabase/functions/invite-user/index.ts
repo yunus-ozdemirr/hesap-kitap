@@ -72,7 +72,7 @@ Deno.serve(async (request) => {
           }, { onConflict: 'workspace_id,email' })
           if (allowError) throw allowError
           const { data: linkData, error: linkError } = await adminClient.auth.admin.generateLink({
-            type: 'invite', email, options: redirectTo ? { redirectTo } : undefined,
+            type: 'invite', email, options: { ...(redirectTo ? { redirectTo } : {}), data: { has_password: false } },
           })
           if (linkError) throw linkError
           links.push({ email, actionLink: linkData.properties.action_link })

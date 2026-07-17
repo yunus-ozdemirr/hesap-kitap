@@ -8,7 +8,7 @@ import type { Session } from '@supabase/supabase-js'
 import { supabase, isConfigured } from './lib/supabase'
 import { demoState } from './lib/demo'
 import { calculateLedger, formatMoney, parseMoney } from './lib/money'
-import { claimWorkspace, createInvites, createProject, createTransaction, getDocumentUrl, loadLedger, updateStartingBalance } from './lib/data'
+import { claimWorkspace, createInvites, createProject, createTransaction, getDocumentUrl, loadLedger, manageMember, updateStartingBalance } from './lib/data'
 import type { LedgerState, Project, Transaction, TransactionInput, TransactionKind } from './types'
 
 type View = 'dashboard' | 'transactions' | 'projects' | 'reports' | 'team'
@@ -71,7 +71,7 @@ function LedgerApp({ ledger, setLedger, refresh, session }: {
 }) {
   const [view, setView] = useState<View>('dashboard')
   const [mobileNav, setMobileNav] = useState(false)
-  const [modal, setModal] = useState<'transaction' | 'project' | 'invite' | 'balance' | 'starting' | null>(null)
+  const [modal, setModal] = useState<'transaction' | 'project' | 'invite' | 'balance' | 'starting' | 'password' | null>(null)
   const [toast, setToast] = useState('')
   const [search, setSearch] = useState('')
   const metrics = useMemo(() => calculateLedger(ledger.transactions), [ledger.transactions])
@@ -147,6 +147,13 @@ function LedgerApp({ ledger, setLedger, refresh, session }: {
     setModal(null); notify(`${emails.length} kişiye davet gönderildi`)
   }
 
+  const memberAction = async (userId: string, action: 'remove' | 'transfer_ownership') => {
+    if (!isConfigured) return
+    await manageMember(ledger.workspace.id, userId, action)
+    await refresh()
+    notify(action === 'remove' ? 'Üye ekipten çıkarıldı' : 'Kasa sahipliği devredildi')
+  }
+
   const nav = [
     { id: 'dashboard' as View, label: 'Genel bakış', icon: LayoutDashboard },
     { id: 'transactions' as View, label: 'Hareketler', icon: ReceiptText },
@@ -191,7 +198,7 @@ function LedgerApp({ ledger, setLedger, refresh, session }: {
           {view === 'transactions' && <Transactions ledger={ledger} search={search} setSearch={setSearch} />}
           {view === 'projects' && <Projects ledger={ledger} canEdit={canEdit} onNew={() => setModal('project')} />}
           {view === 'reports' && <Reports ledger={ledger} />}
-          {view === 'team' && <Team ledger={ledger} onInvite={() => setModal('invite')} />}
+          {view === 'team' && <Team ledger={ledger} currentUserId={session?.user.id ?? ''} onInvite={() => setModal('invite')} onPassword={() => setModal('password')} onMemberAction={memberAction} />}
         </div>
       </main>
 
@@ -200,6 +207,7 @@ function LedgerApp({ ledger, setLedger, refresh, session }: {
       {modal === 'balance' && <BalanceModal mode="current" currentBalance={metrics.balance} onClose={() => setModal(null)} onSave={adjustBalance} />}
       {modal === 'starting' && <BalanceModal mode="starting" currentBalance={ledger.workspace.starting_balance_minor} onClose={() => setModal(null)} onSave={changeStartingBalance} />}
       {modal === 'invite' && <InviteModal workspaceId={ledger.workspace.id} onClose={() => setModal(null)} onDone={completeInvites} />}
+      {modal === 'password' && <PasswordModal onClose={() => setModal(null)} onDone={() => { setModal(null); notify('Şifreniz kaydedildi') }} />}
       {toast && <div className="toast"><Check size={18} />{toast}</div>}
     </div>
   )
@@ -293,8 +301,15 @@ function Reports({ ledger }: { ledger: LedgerState }) {
   return <div className="reports-layout"><section className="report-paper"><div className="report-brand"><span>ORTAK KASA</span><small>AYLIK MALİ ÖZET · TEMMUZ 2026</small></div><div className="report-total"><span>Ay sonu kullanılabilir bakiye</span><strong>{formatMoney(metrics.balance)}</strong></div><div className="report-columns"><div><span>Toplam gider</span><b>{formatMoney(metrics.totalExpenses)}</b></div><div><span>Üyelere borç</span><b>{formatMoney(metrics.memberPayable)}</b></div><div><span>Eksik belge</span><b>{ledger.transactions.filter(t => t.kind === 'expense' && !t.document).length}</b></div></div><div className="report-rule" /><p>Bu rapor ekip içi takip amacıyla hazırlanmıştır; resmî muhasebe defteri yerine geçmez.</p></section><aside className="report-actions"><h2>Raporunu hazırla</h2><p>Hareketleri mali müşavirinle veya ekip arkadaşlarınla düzenli bir dosya olarak paylaş.</p><button className="primary-button wide" onClick={exportCsv}><Download size={18} /> CSV olarak indir</button><button className="secondary-button wide" onClick={exportBackup}><Download size={18} /> JSON yedeği indir</button><button className="secondary-button wide" onClick={() => window.print()}><FileText size={18} /> PDF / Yazdır</button></aside></div>
 }
 
-function Team({ ledger, onInvite }: { ledger: LedgerState; onInvite: () => void }) {
-  return <section className="panel page-panel reveal"><div className="team-head"><div><span className="eyebrow">ERİŞİM KONTROLÜ</span><h2>Kasanın anahtarları kimde?</h2></div>{ledger.role === 'owner' && <button className="secondary-button" onClick={onInvite}><Plus size={17} /> Kişi davet et</button>}</div><div className="member-list">{ledger.members.map(member => <div className="member-row" key={member.user_id}><div className="avatar large">{member.display_name.slice(0,2).toUpperCase()}</div><div><strong>{member.display_name}</strong><span>{member.email ?? 'Davetli ekip üyesi'}</span></div><span className={`role-pill role-${member.role}`}>{roleLabel[member.role]}</span></div>)}</div><div className="team-info"><ShieldCheck /><div><strong>Faturalar ayrı korunur</strong><p>Görüntüleyici rolündeki arkadaşlar kasa özetini görür; belge dosyalarına erişemez.</p></div></div></section>
+function Team({ ledger, currentUserId, onInvite, onPassword, onMemberAction }: { ledger: LedgerState; currentUserId: string; onInvite: () => void; onPassword: () => void; onMemberAction: (userId: string, action: 'remove' | 'transfer_ownership') => Promise<void> }) {
+  const [busy, setBusy] = useState('')
+  const act = async (memberId: string, action: 'remove' | 'transfer_ownership', name: string) => {
+    const message = action === 'remove' ? `${name} ekipten çıkarılsın mı?` : `Kasa sahipliği ${name} adlı üyeye devredilsin mi? Siz düzenleyici olacaksınız.`
+    if (!window.confirm(message)) return
+    setBusy(memberId)
+    try { await onMemberAction(memberId, action) } finally { setBusy('') }
+  }
+  return <section className="panel page-panel reveal"><div className="team-head"><div><span className="eyebrow">ERİŞİM KONTROLÜ</span><h2>Kasanın anahtarları kimde?</h2></div><div className="team-head-actions"><button className="secondary-button" onClick={onPassword}>Şifre belirle / değiştir</button>{ledger.role === 'owner' && <button className="secondary-button" onClick={onInvite}><Plus size={17} /> Kişi davet et</button>}</div></div><div className="member-list">{ledger.members.map(member => <div className="member-row" key={member.user_id}><div className="avatar large">{member.display_name.slice(0,2).toUpperCase()}</div><div><strong>{member.display_name}{member.user_id === currentUserId ? ' (siz)' : ''}</strong><span>{member.email ?? 'Ekip üyesi'}</span></div><div className="member-controls"><span className={`role-pill role-${member.role}`}>{roleLabel[member.role]}</span>{ledger.role === 'owner' && member.user_id !== currentUserId && <><button disabled={busy === member.user_id} onClick={() => act(member.user_id, 'transfer_ownership', member.display_name)}>Sahipliği devret</button><button className="danger-link" disabled={busy === member.user_id} onClick={() => act(member.user_id, 'remove', member.display_name)}>Çıkar</button></>}</div></div>)}</div><div className="team-info"><ShieldCheck /><div><strong>Çıkış yapmak kasayı kapatmaz</strong><p>Kasa Supabase'te çalışmaya devam eder. Şifrenizle yeniden girebilirsiniz; ekipten ayrılmak isteyen owner önce sahipliği başka üyeye devretmelidir.</p></div></div></section>
 }
 
 function TransactionModal({ ledger, onClose, onSave }: { ledger: LedgerState; onClose: () => void; onSave: (input: TransactionInput, file?: File) => Promise<void> }) {
@@ -349,22 +364,25 @@ function Modal({ title, subtitle, onClose, children }: { title: string; subtitle
 
 function LoginScreen({ error, onError }: { error: string; onError: (s: string) => void }) {
   const [email, setEmail] = useState('')
-  const [sent, setSent] = useState(false)
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault(); setLoading(true); onError('')
-    const { error: sendError } = await supabase!.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: false, emailRedirectTo: window.location.origin + import.meta.env.BASE_URL },
-    })
+    const { error: signInError } = await supabase!.auth.signInWithPassword({ email, password })
     setLoading(false)
-    if (sendError?.status === 429) onError('Çok fazla deneme yapıldı. Bir dakika bekleyip tekrar deneyin.')
-    else if (sendError) onError('Bu e-posta davetli değil veya giriş bağlantısı gönderilemedi.')
-    else setSent(true)
+    if (signInError) onError('E-posta veya şifre hatalı. İlk girişte davet bağlantınızı kullanıp bir şifre belirleyin.')
   }
 
-  return <div className="auth-page"><div className="auth-art"><div className="brand auth-brand"><div className="brand-mark"><span>₺</span></div><div><strong>ORTAK KASA</strong><small>ekibin para defteri</small></div></div><div className="auth-quote"><span>01 / GÜVENLİ ORTAK ALAN</span><h1>Paranızın nerede olduğunu <em>hepiniz de</em> bilin.</h1><p>Giderler, belgeler ve projeler aynı defterde. Sessiz, düzenli, birlikte.</p></div><div className="auth-stamp">DAVETLİ<br/>EKİP ALANI</div></div><div className="auth-form-wrap"><form className="auth-form" onSubmit={submit}><span className="eyebrow">HOŞ GELDİN</span><h2>Kasaya giriş yap</h2><p>Davet edildiğin e-posta adresini yaz. Sana tek kullanımlık güvenli bir giriş bağlantısı gönderelim.</p>{sent ? <div className="sent-state"><Check /><strong>Gelen kutuna bak</strong><span>En yeni giriş bağlantısını {email} adresine gönderdik.</span></div> : <><label className="field">E-posta adresi<input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="sen@ekip.com" /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading}>{loading ? 'Gönderiliyor…' : 'Giriş bağlantısı gönder'}</button></>}<small className="privacy"><ShieldCheck /> Açık kayıt yoktur. Yalnızca davet edilen kişiler giriş yapabilir.</small></form></div></div>
+  return <div className="auth-page"><div className="auth-art"><div className="brand auth-brand"><div className="brand-mark"><span>₺</span></div><div><strong>ORTAK KASA</strong><small>ekibin para defteri</small></div></div><div className="auth-quote"><span>01 / GÜVENLİ ORTAK ALAN</span><h1>Paranızın nerede olduğunu <em>hepiniz de</em> bilin.</h1><p>Giderler, belgeler ve projeler aynı defterde. Sessiz, düzenli, birlikte.</p></div><div className="auth-stamp">DAVETLİ<br/>EKİP ALANI</div></div><div className="auth-form-wrap"><form className="auth-form" onSubmit={submit}><span className="eyebrow">HOŞ GELDİN</span><h2>Kasaya giriş yap</h2><p>İlk girişte davet bağlantını kullan. Sonraki girişlerde e-posta ve şifren yeterli.</p><label className="field">E-posta adresi<input required type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="sen@ekip.com" /></label><label className="field">Şifre<input required type="password" autoComplete="current-password" minLength={8} value={password} onChange={e => setPassword(e.target.value)} placeholder="En az 8 karakter" /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading}>{loading ? 'Giriş yapılıyor…' : 'Şifreyle giriş yap'}</button><small className="privacy"><ShieldCheck /> Açık kayıt yoktur. Yalnızca davet edilen kişiler giriş yapabilir.</small></form></div></div>
+}
+
+function PasswordModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [password, setPassword] = useState('')
+  const [again, setAgain] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  return <Modal title="Giriş şifreni belirle" subtitle="Bundan sonra davet bağlantısına ihtiyaç duymadan giriş yap." onClose={onClose}><form className="form-stack" onSubmit={async e => { e.preventDefault(); setError(''); if (password.length < 8) { setError('Şifre en az 8 karakter olmalı.'); return } if (password !== again) { setError('Şifreler aynı değil.'); return } setSaving(true); const { error: updateError } = await supabase!.auth.updateUser({ password, data: { has_password: true } }); setSaving(false); if (updateError) setError(updateError.message); else onDone() }}><label className="field">Yeni şifre<input required type="password" autoComplete="new-password" minLength={8} value={password} onChange={e => setPassword(e.target.value)} /></label><label className="field">Yeni şifre tekrar<input required type="password" autoComplete="new-password" minLength={8} value={again} onChange={e => setAgain(e.target.value)} /></label><div className="inline-note"><ShieldCheck /><p>Şifrenizi belirledikten sonra e-posta kotası veya owner yardımı olmadan giriş yapabilirsiniz.</p></div>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onClose}>Vazgeç</button><button className="primary-button" disabled={saving}>{saving ? 'Kaydediliyor…' : 'Şifreyi kaydet'}</button></div></form></Modal>
 }
 
 function ClaimScreen({ onClaim, error, onError }: { onClaim: (name: string, amount: number) => Promise<void>; error: string; onError: (s: string) => void }) {

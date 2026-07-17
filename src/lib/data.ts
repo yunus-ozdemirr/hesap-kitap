@@ -86,6 +86,16 @@ export async function createInvites(workspaceId: string, emails: string[], role:
   }
 }
 
+export async function manageMember(workspaceId: string, userId: string, action: 'remove' | 'transfer_ownership') {
+  if (!supabase) throw new Error('Supabase bağlı değil')
+  const { error } = await supabase.rpc('manage_workspace_member', {
+    target_workspace: workspaceId,
+    target_user: userId,
+    requested_action: action,
+  })
+  if (error) throw error
+}
+
 export async function getDocumentUrl(path: string) {
   if (!supabase) return null
   const { data, error } = await supabase.storage.from('documents').createSignedUrl(path, 60)
