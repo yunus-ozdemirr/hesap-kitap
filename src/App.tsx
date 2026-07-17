@@ -9,7 +9,7 @@ import { supabase, isConfigured } from './lib/supabase'
 import { demoState } from './lib/demo'
 import { calculateLedger, formatMoney, parseMoney } from './lib/money'
 import { isTrustedInviteLink, safeSpreadsheetCell, validateDocumentFile } from './lib/security'
-import { claimWorkspace, createInvites, createProject, createTransaction, getDocumentUrl, loadLedger, manageMember, updateStartingBalance } from './lib/data'
+import { canClaimWorkspace, claimWorkspace, createInvites, createProject, createTransaction, getDocumentUrl, loadLedger, manageMember, updateStartingBalance } from './lib/data'
 import type { LedgerState, Project, Transaction, TransactionInput, TransactionKind } from './types'
 
 type View = 'dashboard' | 'transactions' | 'projects' | 'reports' | 'team'
@@ -25,6 +25,7 @@ function App() {
   const [authReady, setAuthReady] = useState(!isConfigured)
   const [ledger, setLedger] = useState<LedgerState | null>(isConfigured ? null : demoState)
   const [needsClaim, setNeedsClaim] = useState(false)
+  const [needsAccess, setNeedsAccess] = useState(false)
   const [loading, setLoading] = useState(isConfigured)
   const [error, setError] = useState('')
 
@@ -34,7 +35,9 @@ function App() {
     try {
       const next = await loadLedger()
       setLedger(next)
-      setNeedsClaim(!next)
+      const setupAvailable = !next && await canClaimWorkspace()
+      setNeedsClaim(Boolean(setupAvailable))
+      setNeedsAccess(!next && !setupAvailable)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Veriler yüklenemedi')
     } finally { setLoading(false) }
@@ -58,6 +61,7 @@ function App() {
 
   if (!authReady || loading) return <LoadingScreen />
   if (isConfigured && !session) return <LoginScreen onError={setError} error={error} />
+  if (needsAccess) return <AccessPendingScreen email={session?.user.email ?? ''} />
   if (needsClaim) return <ClaimScreen onClaim={async (name, amount) => { await claimWorkspace(name, amount); await refresh() }} onError={setError} error={error} />
   if (!ledger) return <LoadingScreen />
 
@@ -392,6 +396,10 @@ function ClaimScreen({ onClaim, error, onError }: { onClaim: (name: string, amou
   const [amount, setAmount] = useState('')
   const initialMinor = parseMoney(amount)
   return <div className="claim-page"><form className="claim-card" onSubmit={async e => { e.preventDefault(); if (!initialMinor) { onError('Başlangıç bakiyesi sıfırdan büyük olmalı.'); return } setLoading(true); onError(''); try { await onClaim(name.trim(), initialMinor) } catch (err) { onError(err instanceof Error ? err.message : 'Kurulum tamamlanamadı') } finally { setLoading(false) } }}><div className="brand-mark big"><span>₺</span></div><span className="eyebrow">İLK KURULUM</span><h1>Kasanı oluştur</h1><p>Kasanın adını ve başlangıç parasını belirle. Yüzde göstergesi bu tutara göre hesaplanacak; bakiyeyi daha sonra güvenli fark kaydıyla değiştirebilirsin.</p><label className="field left-field">Kasa adı<input required minLength={2} maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="Örn. Dernek Proje Kasası" /></label><div className="amount-field claim-amount"><label>Başlangıç bakiyesi</label><div><span>₺</span><input required inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0,00" /></div></div>{error && <p className="form-error">{error}</p>}<button className="primary-button wide" disabled={loading || !initialMinor}>{loading ? 'Hazırlanıyor…' : 'Kasayı oluştur'}</button></form></div>
+}
+
+function AccessPendingScreen({ email }: { email: string }) {
+  return <div className="claim-page"><div className="claim-card"><div className="brand-mark big"><span>₺</span></div><span className="eyebrow">ERİŞİM BEKLİYOR</span><h1>Bu hesap bir kasaya bağlı değil</h1><p><strong>{email}</strong> adresiyle giriş yaptınız. Kasa sahibinden bu adres için davet bağlantısı isteyin veya doğru hesabınızla tekrar giriş yapın.</p><button className="primary-button wide" onClick={() => supabase?.auth.signOut()}>Farklı hesapla giriş yap</button></div></div>
 }
 
 function LoadingScreen() { return <div className="loading-page"><div className="ledger-loader"><span>₺</span></div><p>Kasa defteri açılıyor…</p></div> }

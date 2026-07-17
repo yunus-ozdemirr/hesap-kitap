@@ -37,6 +37,13 @@ export async function claimWorkspace(workspaceName: string, initialBalanceMinor:
   if (error) throw error
 }
 
+export async function canClaimWorkspace() {
+  if (!supabase) return false
+  const { data, error } = await supabase.rpc('workspace_setup_available')
+  if (error) throw error
+  return Boolean(data)
+}
+
 export async function updateStartingBalance(workspaceId: string, newBalanceMinor: number) {
   if (!supabase) throw new Error('Supabase bağlı değil')
   const { error } = await supabase.rpc('adjust_starting_balance', {
