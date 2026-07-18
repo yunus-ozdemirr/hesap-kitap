@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   ArrowDownLeft, ArrowRightLeft, ArrowUpRight, Banknote, BarChart3, Check, ChevronDown,
   CircleAlert, Download, FileText, FolderKanban, LayoutDashboard, LogOut, Menu, Plus,
-  Pencil, ReceiptText, Search, ShieldCheck, Sparkles, Trash2, Users, WalletCards, X,
+  Pencil, ReceiptText, Search, ShieldCheck, Sparkles, Trash2, Users, WalletCards, WifiOff, X,
 } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, isConfigured } from './lib/supabase'
@@ -94,10 +94,38 @@ function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
   const [workspaceMenu, setWorkspaceMenu] = useState(false)
   const [toast, setToast] = useState('')
   const [search, setSearch] = useState('')
+  const [online, setOnline] = useState(() => navigator.onLine)
   const metrics = useMemo(() => calculateLedger(ledger.transactions), [ledger.transactions])
   const canEdit = ledger.role === 'owner' || ledger.role === 'editor'
 
   useEffect(() => { localStorage.setItem('ortak-kasa-view', view) }, [view])
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    window.addEventListener('online', update); window.addEventListener('offline', update)
+    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) }
+  }, [])
+  useEffect(() => {
+    document.body.classList.toggle('nav-open', mobileNav)
+    return () => document.body.classList.remove('nav-open')
+  }, [mobileNav])
+  useEffect(() => {
+    if (!supabase || !isConfigured) return
+    let timer = 0
+    void supabase.auth.getSession().then(({ data }) => {
+      if (data.session?.access_token) supabase?.realtime.setAuth(data.session.access_token)
+    })
+    const sync = () => { window.clearTimeout(timer); timer = window.setTimeout(() => void refresh(ledger.workspace.id), 180) }
+    const syncWhenVisible = () => { if (document.visibilityState === 'visible') sync() }
+    const channel = supabase.channel(`ledger-${ledger.workspace.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `workspace_id=eq.${ledger.workspace.id}` }, sync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'projects', filter: `workspace_id=eq.${ledger.workspace.id}` }, sync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'workspace_members', filter: `workspace_id=eq.${ledger.workspace.id}` }, sync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'workspaces', filter: `id=eq.${ledger.workspace.id}` }, sync)
+      .subscribe()
+    document.addEventListener('visibilitychange', syncWhenVisible)
+    window.addEventListener('online', sync)
+    return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', syncWhenVisible); window.removeEventListener('online', sync); void supabase?.removeChannel(channel) }
+  }, [ledger.workspace.id])
 
   const notify = (message: string) => {
     setToast(message)
@@ -211,6 +239,7 @@ function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
 
   return (
     <div className="app-shell">
+      {mobileNav && <button className="mobile-nav-backdrop" aria-label="Menüyü kapat" onClick={() => setMobileNav(false)} />}
       <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
         <button className="mobile-close" onClick={() => setMobileNav(false)} aria-label="Menüyü kapat"><X /></button>
         <div className="brand">
@@ -231,9 +260,10 @@ function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
       </aside>
 
       <main>
+        {!online && <div className="offline-banner" role="status"><WifiOff size={16} /><span>İnternet bağlantısı yok. Verileri görebilirsin; yeni işlemler bağlantı gelince kaydedilebilir.</span></div>}
         <header className="topbar">
           <button className="menu-button" onClick={() => setMobileNav(true)} aria-label="Menüyü aç"><Menu /></button>
-          <div className="page-title"><span>17 Temmuz 2026</span><h1>{nav.find((item) => item.id === view)?.label}</h1></div>
+          <div className="page-title"><span>{new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date())}</span><h1>{nav.find((item) => item.id === view)?.label}</h1></div>
           <div className="top-actions">
             {!isConfigured && <span className="demo-badge"><Sparkles size={14} /> Demo</span>}
             {canEdit && <button className="primary-button" onClick={() => { setEditingTransaction(null); setModal('transaction') }}><Plus size={18} /> Yeni hareket</button>}
@@ -256,7 +286,7 @@ function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
       {modal === 'invite' && <InviteModal workspaceId={ledger.workspace.id} onClose={() => setModal(null)} onDone={completeInvites} />}
       {modal === 'password' && <PasswordModal onClose={() => setModal(null)} onDone={() => { setModal(null); notify('Şifreniz kaydedildi') }} />}
       {modal === 'workspace' && <CreateWorkspaceModal onClose={() => setModal(null)} onCreate={async (name, amount) => { const id = await claimWorkspace(name, amount); setModal(null); await refresh(id); notify('Yeni kasa oluşturuldu') }} />}
-      {toast && <div className="toast"><Check size={18} />{toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite"><Check size={18} />{toast}</div>}
     </div>
   )
 }
@@ -338,6 +368,7 @@ function Projects({ ledger, canEdit, onNew }: { ledger: LedgerState; canEdit: bo
 
 function Reports({ ledger }: { ledger: LedgerState }) {
   const metrics = calculateLedger(ledger.transactions)
+  const reportMonth = new Intl.DateTimeFormat('tr-TR', { month: 'long', year: 'numeric' }).format(new Date()).toLocaleUpperCase('tr-TR')
   const exportCsv = () => {
     const rows = [['Sıra','Tarih','Tür','Açıklama','Kategori','Proje','Tutar (TL)','Durum','Belge']]
     ledger.transactions.forEach(t => rows.push([String(t.sequence_no), t.transaction_date, kindLabel[t.kind], t.description, t.category ?? '', ledger.projects.find(p => p.id === t.project_id)?.name ?? '', (t.amount_minor / 100).toFixed(2), t.status, t.document ? 'Var' : 'Yok']))
@@ -348,7 +379,7 @@ function Reports({ ledger }: { ledger: LedgerState }) {
     const payload = JSON.stringify({ schemaVersion: 1, exportedAt: new Date().toISOString(), ...ledger }, null, 2)
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([payload], { type: 'application/json' })); a.download = `kasa-yedegi-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(a.href)
   }
-  return <div className="reports-layout"><section className="report-paper"><div className="report-brand"><span>ORTAK KASA</span><small>AYLIK MALİ ÖZET · TEMMUZ 2026</small></div><div className="report-total"><span>Ay sonu kullanılabilir bakiye</span><strong>{formatMoney(metrics.balance)}</strong></div><div className="report-columns"><div><span>Toplam gider</span><b>{formatMoney(metrics.totalExpenses)}</b></div><div><span>Üyelere borç</span><b>{formatMoney(metrics.memberPayable)}</b></div><div><span>Eksik belge</span><b>{ledger.transactions.filter(t => t.kind === 'expense' && t.status === 'posted' && !t.document).length}</b></div></div><div className="report-rule" /><p>Bu rapor ekip içi takip amacıyla hazırlanmıştır; resmî muhasebe defteri yerine geçmez.</p></section><aside className="report-actions"><h2>Raporunu hazırla</h2><p>Hareketleri mali müşavirinle veya ekip arkadaşlarınla düzenli bir dosya olarak paylaş.</p><button className="primary-button wide" onClick={exportCsv}><Download size={18} /> CSV olarak indir</button><button className="secondary-button wide" onClick={exportBackup}><Download size={18} /> JSON yedeği indir</button><button className="secondary-button wide" onClick={() => window.print()}><FileText size={18} /> PDF / Yazdır</button></aside></div>
+  return <div className="reports-layout"><section className="report-paper"><div className="report-brand"><span>ORTAK KASA</span><small>AYLIK MALİ ÖZET · {reportMonth}</small></div><div className="report-total"><span>Ay sonu kullanılabilir bakiye</span><strong>{formatMoney(metrics.balance)}</strong></div><div className="report-columns"><div><span>Toplam gider</span><b>{formatMoney(metrics.totalExpenses)}</b></div><div><span>Üyelere borç</span><b>{formatMoney(metrics.memberPayable)}</b></div><div><span>Eksik belge</span><b>{ledger.transactions.filter(t => t.kind === 'expense' && t.status === 'posted' && !t.document).length}</b></div></div><div className="report-rule" /><p>Bu rapor ekip içi takip amacıyla hazırlanmıştır; resmî muhasebe defteri yerine geçmez.</p></section><aside className="report-actions"><h2>Raporunu hazırla</h2><p>Hareketleri mali müşavirinle veya ekip arkadaşlarınla düzenli bir dosya olarak paylaş.</p><button className="primary-button wide" onClick={exportCsv}><Download size={18} /> CSV olarak indir</button><button className="secondary-button wide" onClick={exportBackup}><Download size={18} /> JSON yedeği indir</button><button className="secondary-button wide" onClick={() => window.print()}><FileText size={18} /> PDF / Yazdır</button></aside></div>
 }
 
 function Team({ ledger, currentUserId, onInvite, onPassword, onMemberAction }: { ledger: LedgerState; currentUserId: string; onInvite: () => void; onPassword: () => void; onMemberAction: (userId: string, action: 'remove' | 'transfer_ownership') => Promise<void> }) {
@@ -419,7 +450,12 @@ function InviteModal({ workspaceId, onClose, onDone }: { workspaceId: string; on
 }
 
 function Modal({ title, subtitle, onClose, children }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode }) {
-  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}><section className="modal"><button className="modal-close" onClick={onClose}><X /></button><div className="modal-title"><span className="eyebrow">YENİ KAYIT</span><h2>{title}</h2><p>{subtitle}</p></div>{children}</section></div>
+  useEffect(() => {
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previous }
+  }, [])
+  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}><section className="modal" role="dialog" aria-modal="true" aria-label={title}><button className="modal-close" onClick={onClose} aria-label="Pencereyi kapat"><X /></button><div className="modal-title"><span className="eyebrow">YENİ KAYIT</span><h2>{title}</h2><p>{subtitle}</p></div>{children}</section></div>
 }
 
 function LoginScreen({ error, onError }: { error: string; onError: (s: string) => void }) {

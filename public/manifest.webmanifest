@@ -1,7 +1,7 @@
 {
   "name": "Ortak Kasa — Ekip Bütçesi",
   "short_name": "Ortak Kasa",
-  "description": "Üç kişilik ekipler için ortak kasa ve gider takibi",
+  "description": "Ekipler ve projeler için ortak kasa ve gider takibi",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#f1f0e9",

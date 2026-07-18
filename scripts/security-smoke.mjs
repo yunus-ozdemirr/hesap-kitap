@@ -74,6 +74,32 @@ try {
   const viewerRead = await viewer.from('workspaces').select('id').eq('id', first.data.id)
   assert(!viewerRead.error && viewerRead.data.length === 1, 'Viewer kendi kasasını okuyabiliyor')
 
+  let resolveRealtime
+  let rejectRealtime
+  const viewerSession = await viewer.auth.getSession()
+  viewer.realtime.setAuth(viewerSession.data.session.access_token)
+  const realtimeEvent = new Promise((resolve, reject) => { resolveRealtime = resolve; rejectRealtime = reject })
+  const subscribed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Realtime aboneliği zaman aşımına uğradı')), 10000)
+    viewer.channel(`security-realtime-${stamp}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions', filter: `workspace_id=eq.${first.data.id}` }, payload => resolveRealtime(payload))
+      .subscribe(status => {
+        if (status === 'SUBSCRIBED') { clearTimeout(timer); setTimeout(resolve, 500) }
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') { clearTimeout(timer); reject(new Error(`Realtime durumu: ${status}`)) }
+      })
+  })
+  await subscribed
+  const realtimeInsert = await editor.rpc('create_transaction', {
+    p_workspace_id: first.data.id, p_kind: 'income', p_status: 'posted',
+    p_transaction_date: new Date().toISOString().slice(0, 10), p_amount_minor: 150,
+    p_description: 'Realtime security test', p_category: 'Test', p_project_id: null,
+    p_payment_source: 'group_bank', p_member_id: null,
+  }).single()
+  if (realtimeInsert.error) rejectRealtime(realtimeInsert.error)
+  const realtimePayload = await Promise.race([realtimeEvent, new Promise((_, reject) => setTimeout(() => reject(new Error('Realtime olayı alınamadı')), 20000))])
+  assert(realtimePayload.new.id === realtimeInsert.data.id, 'Kasa hareketi diğer üyenin cihazına Realtime ile ulaşıyor')
+  await viewer.removeAllChannels()
+
   const viewerInsert = await viewer.from('transactions').insert({ workspace_id: first.data.id, sequence_no: 0, kind: 'income', status: 'posted', amount_minor: 100, description: 'Blocked viewer write', payment_source: 'group_bank', created_by: users.viewer })
   assert(Boolean(viewerInsert.error), 'Viewer finansal kayıt oluşturamıyor')
 
