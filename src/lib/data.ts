@@ -64,19 +64,34 @@ export async function updateStartingBalance(workspaceId: string, newBalanceMinor
 
 export async function createTransaction(workspaceId: string, input: TransactionInput, file?: File) {
   if (!supabase) throw new Error('Supabase bağlı değil')
-  const { data, error } = await supabase.from('transactions').insert({ workspace_id: workspaceId, ...input }).select().single()
-  if (error) throw error
+  const { data, error } = await supabase.rpc('create_transaction', {
+    p_workspace_id: workspaceId,
+    p_kind: input.kind,
+    p_status: input.status,
+    p_transaction_date: input.transaction_date,
+    p_amount_minor: input.amount_minor,
+    p_description: input.description,
+    p_category: input.category,
+    p_project_id: input.project_id,
+    p_payment_source: input.payment_source,
+    p_member_id: input.member_id,
+  }).single()
+  if (error) {
+    const detail = [error.message, error.details, error.hint].filter(Boolean).join(' · ')
+    throw new Error(detail || 'Hareket veritabanına kaydedilemedi')
+  }
+  const created = data as Transaction
 
   if (file) {
     const form = new FormData()
     form.set('workspaceId', workspaceId)
-    form.set('transactionId', data.id)
+    form.set('transactionId', created.id)
     form.set('file', file)
     const upload = await supabase.functions.invoke('upload-document', { body: form })
     if (upload.error) throw upload.error
     if (upload.data?.error) throw new Error(upload.data.error)
   }
-  return data as Transaction
+  return created
 }
 
 export async function createProject(workspaceId: string, project: Pick<Project, 'name' | 'color' | 'budget_minor'>) {
