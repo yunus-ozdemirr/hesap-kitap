@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   ArrowDownLeft, ArrowRightLeft, ArrowUpRight, Banknote, BarChart3, Check, ChevronDown,
   CircleAlert, Download, FileText, FolderKanban, LayoutDashboard, LogOut, Menu, Plus,
-  ReceiptText, Search, ShieldCheck, Sparkles, Users, WalletCards, X,
+  Pencil, ReceiptText, Search, ShieldCheck, Sparkles, Trash2, Users, WalletCards, X,
 } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, isConfigured } from './lib/supabase'
 import { demoState } from './lib/demo'
 import { calculateLedger, formatMoney, parseMoney } from './lib/money'
 import { isTrustedInviteLink, safeSpreadsheetCell, validateDocumentFile } from './lib/security'
-import { claimWorkspace, createInvites, createProject, createTransaction, getDocumentUrl, listWorkspaces, loadLedger, manageMember, updateStartingBalance } from './lib/data'
+import { amendTransaction, claimWorkspace, createInvites, createProject, createTransaction, getDocumentUrl, listWorkspaces, loadLedger, manageMember, updateStartingBalance, voidTransaction } from './lib/data'
 import type { LedgerState, Project, Transaction, TransactionInput, TransactionKind, WorkspaceOption } from './types'
 
 type View = 'dashboard' | 'transactions' | 'projects' | 'reports' | 'team'
@@ -90,6 +90,7 @@ function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
   })
   const [mobileNav, setMobileNav] = useState(false)
   const [modal, setModal] = useState<'transaction' | 'project' | 'invite' | 'balance' | 'starting' | 'password' | 'workspace' | null>(null)
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null)
   const [workspaceMenu, setWorkspaceMenu] = useState(false)
   const [toast, setToast] = useState('')
   const [search, setSearch] = useState('')
@@ -118,6 +119,31 @@ function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
     }
     setModal(null)
     notify('Kayıt kasaya işlendi')
+  }
+
+  const editTransaction = async (input: TransactionInput, file?: File) => {
+    if (!editingTransaction) return
+    if (!isConfigured) {
+      const replacement: Transaction = {
+        ...editingTransaction, ...input, id: crypto.randomUUID(),
+        sequence_no: Math.max(...ledger.transactions.map(t => t.sequence_no), 0) + 1,
+        document: editingTransaction.document ? { ...editingTransaction.document, transaction_id: '' } : null,
+      }
+      setLedger({ ...ledger, transactions: [replacement, ...ledger.transactions.map(t => t.id === editingTransaction.id ? { ...t, status: 'voided' as const, document: null } : t)] })
+    } else {
+      await amendTransaction(editingTransaction.id, input, file)
+      await refresh()
+    }
+    setEditingTransaction(null); setModal(null); notify('Hareket düzeltildi; eski kayıt iptal geçmişinde korundu')
+  }
+
+  const removeTransaction = async (transaction: Transaction) => {
+    if (!window.confirm(`“${transaction.description}” hareketi iptal edilsin mi? Kayıt geçmişten silinmez, iptal olarak saklanır.`)) return
+    try {
+      if (!isConfigured) setLedger({ ...ledger, transactions: ledger.transactions.map(t => t.id === transaction.id ? { ...t, status: 'voided' as const } : t) })
+      else { await voidTransaction(transaction.id); await refresh() }
+      notify('Hareket iptal edildi')
+    } catch (err) { notify(err instanceof Error ? err.message : 'Hareket iptal edilemedi') }
   }
 
   const addProject = async (project: Pick<Project, 'name' | 'color' | 'budget_minor'>) => {
@@ -210,20 +236,20 @@ function LedgerApp({ ledger, workspaces, setLedger, refresh, session }: {
           <div className="page-title"><span>17 Temmuz 2026</span><h1>{nav.find((item) => item.id === view)?.label}</h1></div>
           <div className="top-actions">
             {!isConfigured && <span className="demo-badge"><Sparkles size={14} /> Demo</span>}
-            {canEdit && <button className="primary-button" onClick={() => setModal('transaction')}><Plus size={18} /> Yeni hareket</button>}
+            {canEdit && <button className="primary-button" onClick={() => { setEditingTransaction(null); setModal('transaction') }}><Plus size={18} /> Yeni hareket</button>}
           </div>
         </header>
 
         <div className="page-content">
           {view === 'dashboard' && <Dashboard ledger={ledger} metrics={metrics} canEdit={canEdit} canChangeStart={ledger.role === 'owner'} onAdjust={() => setModal('balance')} onChangeStart={() => setModal('starting')} onAll={() => setView('transactions')} />}
-          {view === 'transactions' && <Transactions ledger={ledger} search={search} setSearch={setSearch} />}
+          {view === 'transactions' && <Transactions ledger={ledger} search={search} setSearch={setSearch} canEdit={canEdit} onEdit={(transaction) => { setEditingTransaction(transaction); setModal('transaction') }} onVoid={removeTransaction} />}
           {view === 'projects' && <Projects ledger={ledger} canEdit={canEdit} onNew={() => setModal('project')} />}
           {view === 'reports' && <Reports ledger={ledger} />}
           {view === 'team' && <Team ledger={ledger} currentUserId={session?.user.id ?? ''} onInvite={() => setModal('invite')} onPassword={() => setModal('password')} onMemberAction={memberAction} />}
         </div>
       </main>
 
-      {modal === 'transaction' && <TransactionModal ledger={ledger} onClose={() => setModal(null)} onSave={addTransaction} />}
+      {modal === 'transaction' && <TransactionModal ledger={ledger} initial={editingTransaction} onClose={() => { setEditingTransaction(null); setModal(null) }} onSave={editingTransaction ? editTransaction : addTransaction} />}
       {modal === 'project' && <ProjectModal onClose={() => setModal(null)} onSave={addProject} />}
       {modal === 'balance' && <BalanceModal mode="current" currentBalance={metrics.balance} onClose={() => setModal(null)} onSave={adjustBalance} />}
       {modal === 'starting' && <BalanceModal mode="starting" currentBalance={ledger.workspace.starting_balance_minor} onClose={() => setModal(null)} onSave={changeStartingBalance} />}
@@ -249,7 +275,7 @@ function Dashboard({ ledger, metrics, canEdit, canChangeStart, onAdjust, onChang
     </section>
 
     <section className="metric-grid">
-      <Metric icon={ArrowUpRight} tone="coral" label="Toplam gider" value={formatMoney(metrics.totalExpenses)} note={`${ledger.transactions.filter(t => t.kind === 'expense').length} hareket`} />
+      <Metric icon={ArrowUpRight} tone="coral" label="Toplam gider" value={formatMoney(metrics.totalExpenses)} note={`${ledger.transactions.filter(t => t.kind === 'expense' && t.status === 'posted').length} hareket`} />
       <Metric icon={ArrowDownLeft} tone="green" label="Ek gelir" value={formatMoney(metrics.totalIncome)} note="Açılış hariç" />
       <Metric icon={WalletCards} tone="yellow" label="Üyelere borç" value={formatMoney(metrics.memberPayable)} note="Kişisel ödemeler" />
       <Metric icon={CircleAlert} tone="ink" label="Eksik belge" value={String(missing).padStart(2, '0')} note={missing ? 'Tamamlanması gerek' : 'Her şey tamam'} />
@@ -278,25 +304,27 @@ function PanelHead({ title, action, onAction }: { title: string; action?: string
   return <div className="panel-head"><h2>{title}</h2>{action && <button onClick={onAction}>{action} <ArrowUpRight size={15} /></button>}</div>
 }
 
-function TransactionList({ transactions, projects }: { transactions: Transaction[]; projects: Project[] }) {
+function TransactionList({ transactions, projects, canEdit = false, onEdit, onVoid }: { transactions: Transaction[]; projects: Project[]; canEdit?: boolean; onEdit?: (transaction: Transaction) => void; onVoid?: (transaction: Transaction) => void }) {
   if (!transactions.length) return <div className="empty-state"><ReceiptText /><p>Henüz bir hareket yok.</p></div>
   return <div className="transaction-list">{transactions.map((item) => {
     const project = projects.find((p) => p.id === item.project_id)
     const positive = item.kind === 'opening' || item.kind === 'income'
-    return <div className="transaction-row" key={item.id}>
+    const actionable = canEdit && item.kind !== 'opening' && item.status !== 'voided'
+    return <div className={`transaction-row ${canEdit ? 'has-actions' : ''} ${item.status === 'voided' ? 'is-voided' : ''}`} key={item.id}>
       <div className={`transaction-symbol ${positive ? 'positive' : item.kind === 'transfer' ? 'neutral' : 'negative'}`}>{positive ? <ArrowDownLeft /> : item.kind === 'transfer' ? <ArrowRightLeft /> : <ArrowUpRight />}</div>
       <div className="transaction-main"><strong>{item.description}</strong><span>{formatDate(item.transaction_date)} · {item.category ?? kindLabel[item.kind]}</span></div>
       <div className="project-tag">{project && <><i style={{ background: project.color }} />{project.name}</>}</div>
       <div className="document-state">{item.document ? <button className="has-doc" onClick={async () => { if (!item.document?.storage_path) return; const url = await getDocumentUrl(item.document.storage_path); if (url) window.open(url, '_blank', 'noopener,noreferrer') }}><FileText size={14} /> Belgeyi aç</button> : item.kind === 'expense' ? <span className="no-doc"><CircleAlert size={14} /> Belge yok</span> : null}</div>
-      <div className={`transaction-amount ${positive ? 'plus' : ''}`}><strong>{positive ? '+' : item.kind === 'transfer' ? '' : '−'}{formatMoney(item.amount_minor)}</strong><span>{item.status === 'draft' ? 'Taslak' : sourceLabel[item.payment_source]}</span></div>
+      <div className={`transaction-amount ${positive ? 'plus' : ''}`}><strong>{positive ? '+' : item.kind === 'transfer' ? '' : '−'}{formatMoney(item.amount_minor)}</strong><span>{item.status === 'voided' ? 'İptal edildi' : item.status === 'draft' ? 'Taslak' : sourceLabel[item.payment_source]}</span></div>
+      {canEdit && <div className="transaction-actions">{actionable && <><button title="Hareketi düzenle" aria-label="Hareketi düzenle" onClick={() => onEdit?.(item)}><Pencil size={14} /></button><button className="danger" title="Hareketi sil (iptal et)" aria-label="Hareketi sil (iptal et)" onClick={() => onVoid?.(item)}><Trash2 size={14} /></button></>}</div>}
     </div>
   })}</div>
 }
 
-function Transactions({ ledger, search, setSearch }: { ledger: LedgerState; search: string; setSearch: (s: string) => void }) {
+function Transactions({ ledger, search, setSearch, canEdit, onEdit, onVoid }: { ledger: LedgerState; search: string; setSearch: (s: string) => void; canEdit: boolean; onEdit: (transaction: Transaction) => void; onVoid: (transaction: Transaction) => void }) {
   const [type, setType] = useState('all')
-  const filtered = ledger.transactions.filter((t) => (type === 'all' || t.kind === type) && `${t.description} ${t.category}`.toLocaleLowerCase('tr').includes(search.toLocaleLowerCase('tr')))
-  return <section className="panel page-panel reveal"><div className="filterbar"><div className="search-box"><Search size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Hareketlerde ara..." /></div><select value={type} onChange={(e) => setType(e.target.value)}><option value="all">Tüm hareketler</option><option value="expense">Giderler</option><option value="income">Gelirler</option><option value="reimbursement">Geri ödemeler</option></select></div><TransactionList transactions={filtered} projects={ledger.projects} /></section>
+  const filtered = ledger.transactions.filter((t) => (type === 'all' || (type === 'voided' ? t.status === 'voided' : t.kind === type)) && `${t.description} ${t.category}`.toLocaleLowerCase('tr').includes(search.toLocaleLowerCase('tr')))
+  return <section className="panel page-panel reveal"><div className="filterbar"><div className="search-box"><Search size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Hareketlerde ara..." /></div><select value={type} onChange={(e) => setType(e.target.value)}><option value="all">Tüm hareketler</option><option value="expense">Giderler</option><option value="income">Gelirler</option><option value="reimbursement">Geri ödemeler</option><option value="voided">İptal edilenler</option></select></div><TransactionList transactions={filtered} projects={ledger.projects} canEdit={canEdit} onEdit={onEdit} onVoid={onVoid} /></section>
 }
 
 function Projects({ ledger, canEdit, onNew }: { ledger: LedgerState; canEdit: boolean; onNew: () => void }) {
@@ -320,7 +348,7 @@ function Reports({ ledger }: { ledger: LedgerState }) {
     const payload = JSON.stringify({ schemaVersion: 1, exportedAt: new Date().toISOString(), ...ledger }, null, 2)
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([payload], { type: 'application/json' })); a.download = `kasa-yedegi-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(a.href)
   }
-  return <div className="reports-layout"><section className="report-paper"><div className="report-brand"><span>ORTAK KASA</span><small>AYLIK MALİ ÖZET · TEMMUZ 2026</small></div><div className="report-total"><span>Ay sonu kullanılabilir bakiye</span><strong>{formatMoney(metrics.balance)}</strong></div><div className="report-columns"><div><span>Toplam gider</span><b>{formatMoney(metrics.totalExpenses)}</b></div><div><span>Üyelere borç</span><b>{formatMoney(metrics.memberPayable)}</b></div><div><span>Eksik belge</span><b>{ledger.transactions.filter(t => t.kind === 'expense' && !t.document).length}</b></div></div><div className="report-rule" /><p>Bu rapor ekip içi takip amacıyla hazırlanmıştır; resmî muhasebe defteri yerine geçmez.</p></section><aside className="report-actions"><h2>Raporunu hazırla</h2><p>Hareketleri mali müşavirinle veya ekip arkadaşlarınla düzenli bir dosya olarak paylaş.</p><button className="primary-button wide" onClick={exportCsv}><Download size={18} /> CSV olarak indir</button><button className="secondary-button wide" onClick={exportBackup}><Download size={18} /> JSON yedeği indir</button><button className="secondary-button wide" onClick={() => window.print()}><FileText size={18} /> PDF / Yazdır</button></aside></div>
+  return <div className="reports-layout"><section className="report-paper"><div className="report-brand"><span>ORTAK KASA</span><small>AYLIK MALİ ÖZET · TEMMUZ 2026</small></div><div className="report-total"><span>Ay sonu kullanılabilir bakiye</span><strong>{formatMoney(metrics.balance)}</strong></div><div className="report-columns"><div><span>Toplam gider</span><b>{formatMoney(metrics.totalExpenses)}</b></div><div><span>Üyelere borç</span><b>{formatMoney(metrics.memberPayable)}</b></div><div><span>Eksik belge</span><b>{ledger.transactions.filter(t => t.kind === 'expense' && t.status === 'posted' && !t.document).length}</b></div></div><div className="report-rule" /><p>Bu rapor ekip içi takip amacıyla hazırlanmıştır; resmî muhasebe defteri yerine geçmez.</p></section><aside className="report-actions"><h2>Raporunu hazırla</h2><p>Hareketleri mali müşavirinle veya ekip arkadaşlarınla düzenli bir dosya olarak paylaş.</p><button className="primary-button wide" onClick={exportCsv}><Download size={18} /> CSV olarak indir</button><button className="secondary-button wide" onClick={exportBackup}><Download size={18} /> JSON yedeği indir</button><button className="secondary-button wide" onClick={() => window.print()}><FileText size={18} /> PDF / Yazdır</button></aside></div>
 }
 
 function Team({ ledger, currentUserId, onInvite, onPassword, onMemberAction }: { ledger: LedgerState; currentUserId: string; onInvite: () => void; onPassword: () => void; onMemberAction: (userId: string, action: 'remove' | 'transfer_ownership') => Promise<void> }) {
@@ -334,11 +362,19 @@ function Team({ ledger, currentUserId, onInvite, onPassword, onMemberAction }: {
   return <section className="panel page-panel reveal"><div className="team-head"><div><span className="eyebrow">ERİŞİM KONTROLÜ</span><h2>Kasanın anahtarları kimde?</h2></div><div className="team-head-actions"><button className="secondary-button" onClick={onPassword}>Şifre belirle / değiştir</button>{ledger.role === 'owner' && <button className="secondary-button" onClick={onInvite}><Plus size={17} /> Kişi davet et</button>}</div></div><div className="member-list">{ledger.members.map(member => <div className="member-row" key={member.user_id}><div className="avatar large">{member.display_name.slice(0,2).toUpperCase()}</div><div><strong>{member.display_name}{member.user_id === currentUserId ? ' (siz)' : ''}</strong><span>{member.email ?? 'Ekip üyesi'}</span></div><div className="member-controls"><span className={`role-pill role-${member.role}`}>{roleLabel[member.role]}</span>{ledger.role === 'owner' && member.user_id !== currentUserId && <><button disabled={busy === member.user_id} onClick={() => act(member.user_id, 'transfer_ownership', member.display_name)}>Sahipliği devret</button><button className="danger-link" disabled={busy === member.user_id} onClick={() => act(member.user_id, 'remove', member.display_name)}>Çıkar</button></>}</div></div>)}</div><div className="team-info"><ShieldCheck /><div><strong>Çıkış yapmak kasayı kapatmaz</strong><p>Kasa Supabase'te çalışmaya devam eder. Şifrenizle yeniden girebilirsiniz; ekipten ayrılmak isteyen owner önce sahipliği başka üyeye devretmelidir.</p></div></div></section>
 }
 
-function TransactionModal({ ledger, onClose, onSave }: { ledger: LedgerState; onClose: () => void; onSave: (input: TransactionInput, file?: File) => Promise<void> }) {
+function TransactionModal({ ledger, initial, onClose, onSave }: { ledger: LedgerState; initial?: Transaction | null; onClose: () => void; onSave: (input: TransactionInput, file?: File) => Promise<void> }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [file, setFile] = useState<File>()
-  const [form, setForm] = useState({ kind: 'expense' as TransactionKind, amount: '', description: '', category: 'Yazılım', project_id: ledger.projects[0]?.id ?? '', payment_source: 'group_bank' as TransactionInput['payment_source'], member_id: '', status: 'posted' as TransactionInput['status'], transaction_date: new Date().toISOString().slice(0, 10) })
+  const [form, setForm] = useState({
+    kind: initial?.kind ?? 'expense' as TransactionKind,
+    amount: initial ? (initial.amount_minor / 100).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',
+    description: initial?.description ?? '', category: initial?.category ?? 'Yazılım',
+    project_id: initial?.project_id ?? ledger.projects[0]?.id ?? '',
+    payment_source: initial?.payment_source ?? 'group_bank' as TransactionInput['payment_source'],
+    member_id: initial?.member_id ?? '', status: 'posted' as TransactionInput['status'],
+    transaction_date: initial?.transaction_date ?? new Date().toISOString().slice(0, 10),
+  })
   const submit = async (e: FormEvent) => {
     e.preventDefault(); setError('')
     if (file) { const fileError = await validateDocumentFile(file); if (fileError) { setError(fileError); return } }
@@ -350,7 +386,7 @@ function TransactionModal({ ledger, onClose, onSave }: { ledger: LedgerState; on
     catch (err) { setError(err instanceof Error ? err.message : 'Kayıt oluşturulamadı') }
     finally { setSaving(false) }
   }
-  return <Modal title="Kasaya hareket ekle" subtitle="Her kayıt, paranın hikâyesini tamamlar." onClose={onClose}><form onSubmit={submit} className="form-stack"><div className="type-picker">{(['expense','income','reimbursement','transfer'] as TransactionKind[]).map(kind => <button type="button" className={form.kind === kind ? 'selected' : ''} onClick={() => setForm({...form, kind})} key={kind}>{kindLabel[kind]}</button>)}</div><div className="amount-field"><label>Tutar</label><div><span>₺</span><input autoFocus inputMode="decimal" value={form.amount} onChange={e => setForm({...form, amount: e.target.value.replace(/[^\d.,]/g, '')})} placeholder="0,00" /></div></div><label className="field">Açıklama<input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Örn. alan adı yenilemesi" /></label><div className="form-grid"><label className="field">Tarih<input type="date" value={form.transaction_date} onChange={e => setForm({...form, transaction_date: e.target.value})} /></label><label className="field">Kategori<input value={form.category} onChange={e => setForm({...form, category: e.target.value})} /></label><label className="field">Proje<select value={form.project_id} onChange={e => setForm({...form, project_id: e.target.value})}><option value="">Projesiz</option>{ledger.projects.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></label><label className="field">Ödeme kaynağı<select value={form.payment_source} onChange={e => setForm({...form, payment_source: e.target.value as TransactionInput['payment_source']})}><option value="group_bank">Grup bankası</option><option value="group_cash">Grup kasası</option><option value="member">Üye ödedi</option></select></label></div>{form.payment_source === 'member' && <label className="field">Ödeyen üye<select value={form.member_id} onChange={e => setForm({...form, member_id: e.target.value})}>{ledger.members.map(m => <option value={m.user_id} key={m.user_id}>{m.display_name}</option>)}</select></label>}<label className="upload-field"><FileText /><div><strong>{file ? file.name : 'Fatura veya fiş ekle'}</strong><span>PDF, JPG veya PNG · en fazla 10 MB</span></div><input type="file" accept="application/pdf,image/jpeg,image/png" onChange={e => setFile(e.target.files?.[0])} /></label>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onClose}>Vazgeç</button><button className="primary-button" disabled={saving}>{saving ? 'Kaydediliyor…' : 'Hareketi kaydet'}</button></div></form></Modal>
+  return <Modal title={initial ? 'Hareketi düzenle' : 'Kasaya hareket ekle'} subtitle={initial ? 'Eski kayıt iptal geçmişinde korunur; düzeltme yeni kayıt olarak işlenir.' : 'Her kayıt, paranın hikâyesini tamamlar.'} onClose={onClose}><form onSubmit={submit} className="form-stack"><div className="type-picker">{(['expense','income','reimbursement','transfer'] as TransactionKind[]).map(kind => <button type="button" className={form.kind === kind ? 'selected' : ''} onClick={() => setForm({...form, kind})} key={kind}>{kindLabel[kind]}</button>)}</div><div className="amount-field"><label>Tutar</label><div><span>₺</span><input autoFocus inputMode="decimal" value={form.amount} onChange={e => setForm({...form, amount: e.target.value.replace(/[^\d.,]/g, '')})} placeholder="0,00" /></div></div><label className="field">Açıklama<input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Örn. alan adı yenilemesi" /></label><div className="form-grid"><label className="field">Tarih<input type="date" value={form.transaction_date} onChange={e => setForm({...form, transaction_date: e.target.value})} /></label><label className="field">Kategori<input value={form.category} onChange={e => setForm({...form, category: e.target.value})} /></label><label className="field">Proje<select value={form.project_id} onChange={e => setForm({...form, project_id: e.target.value})}><option value="">Projesiz</option>{ledger.projects.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></label><label className="field">Ödeme kaynağı<select value={form.payment_source} onChange={e => setForm({...form, payment_source: e.target.value as TransactionInput['payment_source']})}><option value="group_bank">Grup bankası</option><option value="group_cash">Grup kasası</option><option value="member">Üye ödedi</option></select></label></div>{form.payment_source === 'member' && <label className="field">Ödeyen üye<select value={form.member_id} onChange={e => setForm({...form, member_id: e.target.value})}>{ledger.members.map(m => <option value={m.user_id} key={m.user_id}>{m.display_name}</option>)}</select></label>}{initial?.document ? <div className="inline-note"><FileText /><p>Mevcut belge yeni düzeltme kaydına güvenli biçimde aktarılacak.</p></div> : <label className="upload-field"><FileText /><div><strong>{file ? file.name : 'Fatura veya fiş ekle'}</strong><span>PDF, JPG veya PNG · en fazla 10 MB</span></div><input type="file" accept="application/pdf,image/jpeg,image/png" onChange={e => setFile(e.target.files?.[0])} /></label>}{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onClose}>Vazgeç</button><button className="primary-button" disabled={saving}>{saving ? 'Kaydediliyor…' : initial ? 'Düzeltmeyi kaydet' : 'Hareketi kaydet'}</button></div></form></Modal>
 }
 
 function ProjectModal({ onClose, onSave }: { onClose: () => void; onSave: (p: Pick<Project, 'name' | 'color' | 'budget_minor'>) => Promise<void> }) {

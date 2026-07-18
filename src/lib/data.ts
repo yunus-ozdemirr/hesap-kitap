@@ -94,6 +94,39 @@ export async function createTransaction(workspaceId: string, input: TransactionI
   return created
 }
 
+export async function amendTransaction(transactionId: string, input: TransactionInput, file?: File) {
+  if (!supabase) throw new Error('Supabase bağlı değil')
+  const { data, error } = await supabase.rpc('amend_transaction', {
+    p_transaction_id: transactionId,
+    p_kind: input.kind,
+    p_transaction_date: input.transaction_date,
+    p_amount_minor: input.amount_minor,
+    p_description: input.description,
+    p_category: input.category,
+    p_project_id: input.project_id,
+    p_payment_source: input.payment_source,
+    p_member_id: input.member_id,
+  }).single()
+  if (error) throw new Error([error.message, error.details, error.hint].filter(Boolean).join(' · '))
+  const amended = data as Transaction
+  if (file) {
+    const form = new FormData()
+    form.set('workspaceId', amended.workspace_id)
+    form.set('transactionId', amended.id)
+    form.set('file', file)
+    const upload = await supabase.functions.invoke('upload-document', { body: form })
+    if (upload.error) throw upload.error
+    if (upload.data?.error) throw new Error(upload.data.error)
+  }
+  return amended
+}
+
+export async function voidTransaction(transactionId: string) {
+  if (!supabase) throw new Error('Supabase bağlı değil')
+  const { error } = await supabase.rpc('void_transaction', { p_transaction_id: transactionId })
+  if (error) throw new Error([error.message, error.details, error.hint].filter(Boolean).join(' · '))
+}
+
 export async function createProject(workspaceId: string, project: Pick<Project, 'name' | 'color' | 'budget_minor'>) {
   if (!supabase) throw new Error('Supabase bağlı değil')
   const { data, error } = await supabase.from('projects').insert({ workspace_id: workspaceId, ...project }).select().single()

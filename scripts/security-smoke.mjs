@@ -85,6 +85,32 @@ try {
   const deleteDraft = await editor.from('transactions').delete().eq('id', draft.data.id).select('id')
   assert(!deleteDraft.error && deleteDraft.data.length === 1, 'Editor taslak kaydı silebiliyor')
 
+  const editable = await editor.rpc('create_transaction', {
+    p_workspace_id: first.data.id, p_kind: 'expense', p_status: 'posted',
+    p_transaction_date: new Date().toISOString().slice(0, 10), p_amount_minor: 2500,
+    p_description: 'Düzenlenecek güvenlik kaydı', p_category: 'Test', p_project_id: null,
+    p_payment_source: 'group_bank', p_member_id: null,
+  }).single()
+  assert(!editable.error, 'Editor güvenli RPC ile hareket oluşturabiliyor')
+  const viewerAmend = await viewer.rpc('amend_transaction', {
+    p_transaction_id: editable.data.id, p_kind: 'expense', p_transaction_date: new Date().toISOString().slice(0, 10),
+    p_amount_minor: 3000, p_description: 'Yetkisiz düzeltme', p_category: 'Test', p_project_id: null,
+    p_payment_source: 'group_bank', p_member_id: null,
+  })
+  assert(Boolean(viewerAmend.error), 'Viewer hareket düzenleyemiyor')
+  const amended = await editor.rpc('amend_transaction', {
+    p_transaction_id: editable.data.id, p_kind: 'expense', p_transaction_date: new Date().toISOString().slice(0, 10),
+    p_amount_minor: 3000, p_description: 'Düzeltilmiş güvenlik kaydı', p_category: 'Test', p_project_id: null,
+    p_payment_source: 'group_bank', p_member_id: null,
+  }).single()
+  assert(!amended.error && amended.data.amount_minor === 3000, 'Editor kesinleşmiş hareketi iz bırakarak düzeltebiliyor')
+  const oldAfterAmend = await editor.from('transactions').select('status').eq('id', editable.data.id).single()
+  assert(oldAfterAmend.data?.status === 'voided', 'Düzeltmede eski hareket iptal geçmişinde korunuyor')
+  const viewerVoid = await viewer.rpc('void_transaction', { p_transaction_id: amended.data.id })
+  assert(Boolean(viewerVoid.error), 'Viewer hareket silemiyor veya iptal edemiyor')
+  const editorVoid = await editor.rpc('void_transaction', { p_transaction_id: amended.data.id })
+  assert(!editorVoid.error, 'Editor hareketi fiziksel silmeden iptal edebiliyor')
+
   const directRoleChange = await owner.from('workspace_members').update({ role: 'owner' }).eq('workspace_id', first.data.id).eq('user_id', users.viewer)
   assert(Boolean(directRoleChange.error), 'Roller doğrudan API ile değiştirilemiyor')
   const crossTenant = await editor.from('transactions').insert({ workspace_id: first.data.id, sequence_no: 0, kind: 'expense', status: 'draft', amount_minor: 100, description: 'Cross tenant test', project_id: otherProject.data.id, payment_source: 'group_bank', created_by: users.editor })
